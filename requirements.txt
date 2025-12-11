@@ -1,7 +1,8 @@
-streamlit
+streamlit>=1.39.0
 praat-parselmouth
 numpy
 pandas
 plotly
 matplotlib
 scikit-learn
+scipy
