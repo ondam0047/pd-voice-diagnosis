@@ -3,11 +3,13 @@ import parselmouth
 from parselmouth.praat import call
 import numpy as np
 import pandas as pd
-import plotly.graph_objects as go  # Interactive plotting
+import plotly.graph_objects as go
 import matplotlib.pyplot as plt    
 import matplotlib.font_manager as fm 
 import os
 import platform
+# import sounddevice as sd  <-- 이 줄은 반드시 지우거나 앞에 #을 붙여야 합니다!
+from scipy.io.wavfile import write
 from sklearn.ensemble import RandomForestClassifier
 from datetime import datetime
 
@@ -466,3 +468,4 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
                 desc = "청지각적 조음 정확도가 현저히 낮고 발음이 불명료한 것이 주된 특징입니다."
                 
             st.info(f"💡 **임상적 제언:** {desc}")
+
