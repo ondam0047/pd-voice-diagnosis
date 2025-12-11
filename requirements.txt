@@ -1,0 +1,7 @@
+streamlit
+praat-parselmouth
+numpy
+pandas
+plotly
+matplotlib
+scikit-learn
