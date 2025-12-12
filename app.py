@@ -35,15 +35,14 @@ def setup_korean_font():
 setup_korean_font()
 
 # ==========================================
-# 0. 머신러닝 모델 학습 (정상 범주 확대)
+# 0. 머신러닝 모델 학습
 # ==========================================
 @st.cache_resource
 def train_models():
     SCALE_FACTOR = 3.0 
     N_SAMPLES = 100
     
-    # A. 정상 그룹 (Normal)
-    # [수정] 조음 정확도 평균을 95 -> 85로 낮추고, 편차를 10으로 넓힘 (현실적 기준)
+    # A. 정상 그룹
     normal_data = []
     for _ in range(N_SAMPLES):
         normal_data.append([
@@ -52,9 +51,9 @@ def train_models():
             np.random.normal(70.0, 5.0),    
             np.random.normal(4.25, 1.0),    
             0, 0, 0,                        
-            np.random.normal(80.0, 15.0),   # P_Loudness
-            np.random.normal(50.0, 15.0),   # P_Rate
-            np.random.normal(85.0, 10.0),   # [수정] P_Artic: 75~95점도 정상 포함
+            np.random.normal(80.0, 15.0),   
+            np.random.normal(50.0, 15.0),   
+            np.random.normal(85.0, 10.0),   
             "Normal", "None"
         ])
         
@@ -93,7 +92,7 @@ def train_models():
             "Parkinson", "말속도 집단"
         ])
         
-    # 3) 조음 집단 (특징: 조음 정확도 매우 낮음 < 40)
+    # 3) 조음 집단
     for _ in range(N_SAMPLES):
         pd_data.append([
             np.random.normal(151.32, 20.0),  
@@ -105,7 +104,7 @@ def train_models():
             np.random.normal(11.25/SCALE_FACTOR, 2.0), 
             np.random.normal(65.0, 5.0),
             np.random.normal(50.0, 10.0),
-            np.random.normal(30.0, 10.0),    # P_Artic: 여전히 매우 낮게 유지
+            np.random.normal(30.0, 10.0),    
             "Parkinson", "조음 집단"
         ])
 
@@ -192,10 +191,10 @@ def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
             height=300, margin=dict(l=20, r=20, t=40, b=20),
             showlegend=True
         )
-        return fig, cleaned_mean_f0
+        return fig, cleaned_mean_f0, duration
     except Exception as e:
         st.error(f"피치 컨투어 오류: {e}")
-        return None, 0
+        return None, 0, 0
 
 # --- 제목 ---
 st.title("🧠 파킨슨병(PD) 음성 하위유형 변별 진단 시스템")
@@ -286,10 +285,10 @@ if 'current_wav_path' in st.session_state and st.session_state.current_wav_path 
         try:
             sound = parselmouth.Sound(current_wav_path)
             
-            # 1. Pitch Plotly (F0 Mean 포함)
-            fig_plotly, f0_mean_calc = plot_pitch_contour_plotly(current_wav_path, 75, 300)
+            # 1. Pitch Plotly
+            fig_plotly, f0_mean_calc, total_duration = plot_pitch_contour_plotly(current_wav_path, 75, 300)
             
-            # 2. Pitch Range (Cleaned)
+            # 2. Pitch Range
             pitch = call(sound, "To Pitch", 0.0, 75, 300)
             pitch_vals = pitch.selected_array['frequency']
             valid_p = pitch_vals[pitch_vals != 0]
@@ -301,15 +300,16 @@ if 'current_wav_path' in st.session_state and st.session_state.current_wav_path 
             # 3. Intensity, SPS
             intensity = sound.to_intensity()
             mean_db_spl = call(intensity, "Get mean", 0, 0, "energy")
-            sps = st.session_state.user_syllables / sound.duration
             
-            # 4. Jitter/Shimmer 제거됨
+            # 초기 SPS 계산 (전체 길이 기준)
+            sps = st.session_state.user_syllables / total_duration
             
             st.session_state['pitch_range_init'] = pitch_range_init
             st.session_state['f0_mean_init'] = f0_mean_calc
             st.session_state['mean_db_spl_init'] = mean_db_spl
             st.session_state['sps_init'] = sps
             st.session_state['fig_plotly'] = fig_plotly
+            st.session_state['total_duration'] = total_duration # 전체 길이 저장
             st.session_state['is_analyzed'] = True
             
             st.success(f"✅ 분석 완료 (적용된 음절 수: {st.session_state.user_syllables})")
@@ -317,11 +317,37 @@ if 'current_wav_path' in st.session_state and st.session_state.current_wav_path 
             st.error(f"분석 오류: {e}")
 
 if 'is_analyzed' in st.session_state and st.session_state['is_analyzed']:
-    st.markdown("#### 🎧 음도 범위 (Pitch Range) 수동 보정")
+    st.markdown("#### 🎧 음도 컨투어 및 발화 구간 선택")
     
     if 'fig_plotly' in st.session_state:
         st.plotly_chart(st.session_state['fig_plotly'])
     
+    # [수정됨] 발화 구간 수동 설정을 위한 범위 슬라이더
+    st.markdown("##### ⏱️ 말속도(SPS) 계산을 위한 발화 구간 설정")
+    st.caption("그래프를 보고 실제 발화가 시작되고 끝난 지점을 조절하세요. 말속도가 자동으로 재계산됩니다.")
+    
+    total_dur = st.session_state['total_duration']
+    
+    # 범위 슬라이더 (0 ~ 전체시간)
+    start_time, end_time = st.slider(
+        "발화 구간 선택 (초)",
+        min_value=0.0,
+        max_value=float(total_dur),
+        value=(0.0, float(total_dur)),
+        step=0.01
+    )
+    
+    # 선택된 구간 시간 계산
+    selected_duration = end_time - start_time
+    if selected_duration < 0.1: selected_duration = 0.1 # 0으로 나누기 방지
+    
+    # SPS 재계산
+    recalc_sps = st.session_state.user_syllables / selected_duration
+    st.session_state['sps_init'] = recalc_sps # 세션 업데이트
+    
+    st.info(f"선택된 시간: **{start_time:.2f}초 ~ {end_time:.2f}초** (총 **{selected_duration:.2f}초**)  👉  재계산된 말속도: **{recalc_sps:.2f} SPS**")
+
+    # 음도 범위 보정 슬라이더
     col_adj1, col_adj2 = st.columns([2, 1])
     with col_adj1:
         slider_min, slider_max = 0.0, 300.0
@@ -339,7 +365,7 @@ if 'is_analyzed' in st.session_state and st.session_state['is_analyzed']:
             f"{st.session_state['mean_db_spl_init']:.2f} dB",
             f"{st.session_state['f0_mean_init']:.2f} Hz",
             f"{final_pitch_range:.2f} Hz",
-            f"{st.session_state['sps_init']:.2f}"
+            f"{recalc_sps:.2f}" # 재계산된 SPS 표시
         ]
     }
     df_acoustic = pd.DataFrame(acoustic_data)
@@ -404,7 +430,7 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
             st.session_state['f0_mean_init'],
             final_pitch_range,
             st.session_state['mean_db_spl_init'],
-            st.session_state['sps_init'],
+            st.session_state['sps_init'], # 재계산된 SPS가 들어감
             vhi_physical,
             vhi_functional,
             vhi_emotional,
@@ -420,8 +446,7 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
         
         st.subheader("📊 1단계: 변별 진단 결과")
         
-        # [수정] 정상 판정 조건 강화 (Rule-Based Overriding)
-        # 조건: (조음 정확도 >= 70) 또는 (VHI 총점 <= 15) -> 정상으로 강제
+        # [정상 판정 조건 강화] 조음 정확도 >= 70 또는 VHI <= 15
         if p_articulation >= 70 or vhi_total <= 15: 
             diag_pred = "Normal"
             diag_prob = [0.99, 0.01] 
