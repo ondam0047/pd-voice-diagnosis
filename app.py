@@ -4,8 +4,8 @@ from parselmouth.praat import call
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import matplotlib.pyplot as plt
-import matplotlib.font_manager as fm
+import matplotlib.pyplot as plt    
+import matplotlib.font_manager as fm 
 import os
 import platform
 from sklearn.ensemble import RandomForestClassifier
@@ -15,69 +15,49 @@ from datetime import datetime
 st.set_page_config(page_title="PD 음성 변별 진단 시스템", layout="wide")
 
 # ==========================================
-# [중요] 한글 폰트 설정 (Streamlit Cloud 대응)
+# [한글 폰트 설정]
 # ==========================================
 def setup_korean_font():
     system_name = platform.system()
-    
     if system_name == 'Windows':
-        # 윈도우 로컬 환경
         try:
             font_path = "C:/Windows/Fonts/malgun.ttf"
-            font_prop = fm.FontProperties(fname=font_path)
-            plt.rc('font', family=font_prop.get_name())
+            font_name = fm.FontProperties(fname=font_path).get_name()
+            plt.rc('font', family=font_name)
         except:
             plt.rc('font', family='Malgun Gothic')
-            
+    elif system_name == 'Darwin': 
+        plt.rc('font', family='AppleGothic')
     else: 
-        # 리눅스 (Streamlit Cloud) 환경
-        # packages.txt에 fonts-nanum을 추가했다면 이 경로에 폰트가 있습니다.
-        font_path = "/usr/share/fonts/truetype/nanum/NanumGothic.ttf"
-        try:
-            if os.path.exists(font_path):
-                font_prop = fm.FontProperties(fname=font_path)
-                plt.rc('font', family=font_prop.get_name())
-                # 레이더 차트 등에서 깨지지 않게 폰트 매니저에 추가
-                fm.fontManager.addfont(font_path)
-            else:
-                # 폰트가 없을 경우 기본 폰트 사용 (깨질 수 있음)
-                plt.rc('font', family='sans-serif') 
-        except:
-            pass
-
+        plt.rc('font', family='NanumGothic')
     plt.rcParams['axes.unicode_minus'] = False
 
 setup_korean_font()
 
 # ==========================================
-# 0. 머신러닝 모델 학습 (정상/파킨슨 변별력 강화)
+# 0. 머신러닝 모델 학습
 # ==========================================
 @st.cache_resource
 def train_models():
     SCALE_FACTOR = 3.0 
-    
-    # 데이터 수를 늘려 학습 안정성 확보 (각 100개)
     N_SAMPLES = 100
     
-    # Feature: [F0, Range, Intensity, SPS, VHI_P, VHI_F, VHI_E, P_Loudness, P_Rate, P_Artic]
-    
-    # A. 정상 그룹 (Normal)
-    # 특징: 조음 정확도(P_Artic)가 90점 이상으로 매우 높음. VHI 0점.
+    # A. 정상 그룹
     normal_data = []
     for _ in range(N_SAMPLES):
         normal_data.append([
-            np.random.normal(151.32, 30.0), # F0 (범위 넓힘)
-            np.random.normal(91.68, 30.0),  # Range
-            np.random.normal(70.0, 5.0),    # Intensity
-            np.random.normal(4.25, 1.0),    # SPS
-            0, 0, 0,                        # VHI
-            np.random.normal(85.0, 10.0),   # P_Loudness
-            np.random.normal(50.0, 10.0),   # P_Rate
-            np.random.normal(98.0, 2.0),    # [핵심] P_Artic: 거의 만점
+            np.random.normal(151.32, 30.0), 
+            np.random.normal(91.68, 30.0),  
+            np.random.normal(70.0, 5.0),    
+            np.random.normal(4.25, 1.0),    
+            0, 0, 0,                        
+            np.random.normal(85.0, 10.0),   
+            np.random.normal(50.0, 10.0),   
+            np.random.normal(98.0, 2.0),    
             "Normal", "None"
         ])
         
-    # B. 파킨슨 그룹 (Parkinson)
+    # B. 파킨슨 그룹
     pd_data = []
     
     # 1) 강도 집단
@@ -85,14 +65,14 @@ def train_models():
         pd_data.append([
             np.random.normal(153.21, 25.0), 
             np.random.normal(101.21, 25.0), 
-            np.random.normal(50.0, 5.0),     # 강도 낮음
+            np.random.normal(50.0, 5.0),     
             np.random.normal(4.05, 0.8),     
             np.random.normal(20.18/SCALE_FACTOR, 2.0), 
             np.random.normal(19.36/SCALE_FACTOR, 2.0), 
             np.random.normal(18.91/SCALE_FACTOR, 2.0),
-            np.random.normal(30.0, 10.0),    # 청지각 강도 낮음
+            np.random.normal(30.0, 10.0),    
             np.random.normal(50.0, 10.0),
-            np.random.normal(60.0, 10.0),    # 조음은 보통
+            np.random.normal(60.0, 10.0),    
             "Parkinson", "강도 집단"
         ])
         
@@ -102,18 +82,17 @@ def train_models():
             np.random.normal(162.90, 25.0), 
             np.random.normal(84.84, 15.0), 
             np.random.normal(60.0, 4.0),     
-            np.random.normal(6.5, 0.5),      # SPS 빠름
+            np.random.normal(6.5, 0.5),      
             np.random.normal(24.67/SCALE_FACTOR, 2.0), 
             np.random.normal(29.00/SCALE_FACTOR, 2.0), 
             np.random.normal(32.00/SCALE_FACTOR, 2.0), 
             np.random.normal(50.0, 10.0),
-            np.random.normal(80.0, 10.0),    # 청지각 말속도 빠름
+            np.random.normal(80.0, 10.0),    
             np.random.normal(60.0, 10.0),
             "Parkinson", "말속도 집단"
         ])
         
     # 3) 조음 집단
-    # 특징: 조음 정확도(P_Artic)가 40점 대로 낮음
     for _ in range(N_SAMPLES):
         pd_data.append([
             np.random.normal(151.32, 20.0),  
@@ -125,7 +104,7 @@ def train_models():
             np.random.normal(11.25/SCALE_FACTOR, 2.0), 
             np.random.normal(65.0, 5.0),
             np.random.normal(50.0, 10.0),
-            np.random.normal(30.0, 10.0),    # [핵심] P_Artic: 매우 낮음
+            np.random.normal(30.0, 10.0),    
             "Parkinson", "조음 집단"
         ])
 
@@ -136,7 +115,6 @@ def train_models():
 
     features = ['F0', 'Range', 'Intensity', 'SPS', 'VHI_P', 'VHI_F', 'VHI_E', 'P_Loudness', 'P_Rate', 'P_Artic']
 
-    # 모델 학습 (RandomForest)
     model_diagnosis = RandomForestClassifier(n_estimators=200, random_state=42)
     model_diagnosis.fit(df[features], df['Diagnosis'])
 
@@ -343,7 +321,6 @@ if 'is_analyzed' in st.session_state and st.session_state['is_analyzed']:
     
     col_adj1, col_adj2 = st.columns([2, 1])
     with col_adj1:
-        # 슬라이더 최대값 300 및 안전장치
         slider_min, slider_max = 0.0, 300.0
         default_val = st.session_state['pitch_range_init']
         if default_val > slider_max: default_val = slider_max
@@ -418,6 +395,7 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
     if 'is_analyzed' not in st.session_state or not st.session_state['is_analyzed']:
         st.error("⚠️ 음성 분석 (2단계)을 먼저 실행해 주세요.")
     else:
+        # Features
         feature_names = ['F0', 'Range', 'Intensity', 'SPS', 'VHI_P', 'VHI_F', 'VHI_E', 'P_Loudness', 'P_Rate', 'P_Artic']
         
         input_values = [[
@@ -428,9 +406,9 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
             vhi_physical,
             vhi_functional,
             vhi_emotional,
-            p_loudness,     # 청지각-강도
-            p_rate,         # 청지각-말속도
-            p_articulation  # 청지각-조음
+            p_loudness,     
+            p_rate,         
+            p_articulation  
         ]]
         
         input_features = pd.DataFrame(input_values, columns=feature_names)
@@ -440,19 +418,20 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
         
         st.subheader("📊 1단계: 변별 진단 결과")
         
-        # [정상 판정 조건 강화] 조음 정확도가 90점 이상이면 무조건 정상으로 간주
+        # [정상 판정 조건] 조음 정확도가 90점 이상이면 무조건 정상으로 간주
         if p_articulation >= 90: 
             diag_pred = "Normal"
-            diag_prob = [[0.99, 0.01]] # 정상 확률 강제 할당
+            # [수정된 부분] 1차원 리스트로 확률 정의 (Normal=0.99, PD=0.01)
+            diag_prob = [0.99, 0.01] 
 
         if diag_pred == "Normal":
             st.success(f"🟢 **정상 음성 (Normal)** 범위에 속합니다.")
-            st.metric("정상 확률", f"{diag_prob[0][0]*100:.1f}%")
+            st.metric("정상 확률", f"{diag_prob[0]*100:.1f}%") # 1차원 배열 접근 (OK)
             st.info("파킨슨병 특이적 음성 징후가 관찰되지 않았습니다.")
             
         else:
             st.error(f"🔴 **파킨슨병(PD) 음성 장애** 특성이 감지되었습니다.")
-            st.metric("PD 의심 확률", f"{diag_prob[0][1]*100:.1f}%")
+            st.metric("PD 의심 확률", f"{diag_prob[1]*100:.1f}%") # 1차원 배열 접근 (OK)
             
             sub_pred = subgroup_model.predict(input_features)[0]
             sub_probs = subgroup_model.predict_proba(input_features)[0]
@@ -465,7 +444,7 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
             fig = plt.figure(figsize=(4, 4)) 
             ax = fig.add_subplot(111, polar=True)
             
-            # 한글 폰트 적용
+            # 한글 폰트 적용 (리눅스 환경 대비)
             if platform.system() != 'Windows':
                 plt.rc('font', family='NanumGothic')
 
@@ -486,7 +465,7 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
                 st.pyplot(fig)
             
             if sub_pred == "강도 집단":
-                desc = "음성 강도가 낮고, 신체적/기능적 불편함이 주요 특징입니다."
+                desc = "청지각적 강도가 현저히 낮고(약한 목소리), 신체적 불편함이 주요 특징입니다."
             elif sub_pred == "말속도 집단":
                 desc = "말속도가 빠르거나 불규칙하며, 정서적 스트레스가 높게 나타납니다."
             else: 
