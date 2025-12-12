@@ -35,14 +35,15 @@ def setup_korean_font():
 setup_korean_font()
 
 # ==========================================
-# 0. 머신러닝 모델 학습
+# 0. 머신러닝 모델 학습 (정상 범주 확대)
 # ==========================================
 @st.cache_resource
 def train_models():
     SCALE_FACTOR = 3.0 
     N_SAMPLES = 100
     
-    # A. 정상 그룹
+    # A. 정상 그룹 (Normal)
+    # [수정] 조음 정확도 평균을 95 -> 85로 낮추고, 편차를 10으로 넓힘 (현실적 기준)
     normal_data = []
     for _ in range(N_SAMPLES):
         normal_data.append([
@@ -51,9 +52,9 @@ def train_models():
             np.random.normal(70.0, 5.0),    
             np.random.normal(4.25, 1.0),    
             0, 0, 0,                        
-            np.random.normal(85.0, 10.0),   
-            np.random.normal(50.0, 10.0),   
-            np.random.normal(98.0, 2.0),    
+            np.random.normal(80.0, 15.0),   # P_Loudness
+            np.random.normal(50.0, 15.0),   # P_Rate
+            np.random.normal(85.0, 10.0),   # [수정] P_Artic: 75~95점도 정상 포함
             "Normal", "None"
         ])
         
@@ -92,7 +93,7 @@ def train_models():
             "Parkinson", "말속도 집단"
         ])
         
-    # 3) 조음 집단
+    # 3) 조음 집단 (특징: 조음 정확도 매우 낮음 < 40)
     for _ in range(N_SAMPLES):
         pd_data.append([
             np.random.normal(151.32, 20.0),  
@@ -104,7 +105,7 @@ def train_models():
             np.random.normal(11.25/SCALE_FACTOR, 2.0), 
             np.random.normal(65.0, 5.0),
             np.random.normal(50.0, 10.0),
-            np.random.normal(30.0, 10.0),    
+            np.random.normal(30.0, 10.0),    # P_Artic: 여전히 매우 낮게 유지
             "Parkinson", "조음 집단"
         ])
 
@@ -285,10 +286,10 @@ if 'current_wav_path' in st.session_state and st.session_state.current_wav_path 
         try:
             sound = parselmouth.Sound(current_wav_path)
             
-            # 1. Pitch Plotly
+            # 1. Pitch Plotly (F0 Mean 포함)
             fig_plotly, f0_mean_calc = plot_pitch_contour_plotly(current_wav_path, 75, 300)
             
-            # 2. Pitch Range
+            # 2. Pitch Range (Cleaned)
             pitch = call(sound, "To Pitch", 0.0, 75, 300)
             pitch_vals = pitch.selected_array['frequency']
             valid_p = pitch_vals[pitch_vals != 0]
@@ -301,6 +302,8 @@ if 'current_wav_path' in st.session_state and st.session_state.current_wav_path 
             intensity = sound.to_intensity()
             mean_db_spl = call(intensity, "Get mean", 0, 0, "energy")
             sps = st.session_state.user_syllables / sound.duration
+            
+            # 4. Jitter/Shimmer 제거됨
             
             st.session_state['pitch_range_init'] = pitch_range_init
             st.session_state['f0_mean_init'] = f0_mean_calc
@@ -395,7 +398,6 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
     if 'is_analyzed' not in st.session_state or not st.session_state['is_analyzed']:
         st.error("⚠️ 음성 분석 (2단계)을 먼저 실행해 주세요.")
     else:
-        # Features
         feature_names = ['F0', 'Range', 'Intensity', 'SPS', 'VHI_P', 'VHI_F', 'VHI_E', 'P_Loudness', 'P_Rate', 'P_Artic']
         
         input_values = [[
@@ -418,20 +420,20 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
         
         st.subheader("📊 1단계: 변별 진단 결과")
         
-        # [정상 판정 조건] 조음 정확도가 90점 이상이면 무조건 정상으로 간주
-        if p_articulation >= 90: 
+        # [수정] 정상 판정 조건 강화 (Rule-Based Overriding)
+        # 조건: (조음 정확도 >= 70) 또는 (VHI 총점 <= 15) -> 정상으로 강제
+        if p_articulation >= 70 or vhi_total <= 15: 
             diag_pred = "Normal"
-            # [수정된 부분] 1차원 리스트로 확률 정의 (Normal=0.99, PD=0.01)
             diag_prob = [0.99, 0.01] 
 
         if diag_pred == "Normal":
             st.success(f"🟢 **정상 음성 (Normal)** 범위에 속합니다.")
-            st.metric("정상 확률", f"{diag_prob[0]*100:.1f}%") # 1차원 배열 접근 (OK)
+            st.metric("정상 확률", f"{diag_prob[0]*100:.1f}%")
             st.info("파킨슨병 특이적 음성 징후가 관찰되지 않았습니다.")
             
         else:
             st.error(f"🔴 **파킨슨병(PD) 음성 장애** 특성이 감지되었습니다.")
-            st.metric("PD 의심 확률", f"{diag_prob[1]*100:.1f}%") # 1차원 배열 접근 (OK)
+            st.metric("PD 의심 확률", f"{diag_prob[1]*100:.1f}%")
             
             sub_pred = subgroup_model.predict(input_features)[0]
             sub_probs = subgroup_model.predict_proba(input_features)[0]
@@ -444,7 +446,6 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
             fig = plt.figure(figsize=(4, 4)) 
             ax = fig.add_subplot(111, polar=True)
             
-            # 한글 폰트 적용 (리눅스 환경 대비)
             if platform.system() != 'Windows':
                 plt.rc('font', family='NanumGothic')
 
