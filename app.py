@@ -42,7 +42,6 @@ def train_models():
     DATA_FILE = "training_data.csv"
     df = None
     
-    # 1. 데이터 로드 (인코딩 자동 감지)
     if os.path.exists(DATA_FILE):
         loaders = [
             (lambda f: pd.read_csv(f, encoding='utf-8'), "utf-8"),
@@ -239,20 +238,20 @@ if 'current_wav_path' in st.session_state:
     current_wav_path = st.session_state.current_wav_path
 
 if 'user_syllables' not in st.session_state:
-    st.session_state.user_syllables = 75 # 기본값 (4문장 기준)
+    st.session_state.user_syllables = 75 
 
 # [Tab 1] 마이크 녹음
 with tab1:
     st.markdown("##### 📜 낭독 문단 선택")
     
     # 글자 크기 조절
-    font_size = st.slider("🔍 글자 크기 조절", min_value=15, max_value=50, value=25)
+    font_size = st.slider("🔍 글자 크기 조절", min_value=15, max_value=50, value=28)
     
     def styled_text(text, size):
         return f"""
         <div style="
             font-size: {size}px; 
-            line-height: 1.6; 
+            line-height: 1.8; 
             border: 1px solid #ddd; 
             padding: 20px; 
             border-radius: 10px; 
@@ -271,18 +270,14 @@ with tab1:
         """
         st.markdown(styled_text(san_chaek_text, font_size), unsafe_allow_html=True)
 
-    # [문단 2] 4계절의 소리 (정밀 진단용) - 4문장으로 복구됨
+    # [문단 2] 사계절의 소리 (수정됨: 줄글 형태)
     with st.expander("🔎 [2] 사계절의 소리 (정밀 진단용) - 클릭해서 열기"):
         st.caption("✅ 권장 총 음절 수: **75개** (아래 입력창에 75를 입력하세요)")
         four_seasons_text = """
-        <strong>따뜻한 봄바람</strong>이 불면 <strong>빨간 튤립</strong>이 <strong>톡톡</strong> 터집니다.<br>
-        (입술과 혀끝 힘 확인)<br><br>
-        <strong>파란 파도</strong>가 <strong>바닷가 바위</strong>를 덮칩니다.<br>
-        (조음 교대 운동 확인)<br><br>
-        <strong>높은</strong> 하늘 아래 <strong>단풍잎</strong>이 <strong>뚝뚝</strong> 떨어집니다.<br>
-        (말속도 변화 확인)<br><br>
-        추운 겨울밤, <strong>팥죽</strong> 한 그릇을 <strong>뚝딱</strong> 비웠습니다.<br>
-        (종합 조음 능력 확인)
+        따뜻한 봄바람이 불면 빨간 튤립이 톡톡 터집니다.<br>
+        파란 파도가 바닷가 바위를 덮칩니다.<br>
+        높은 하늘 아래 단풍잎이 뚝뚝 떨어집니다.<br>
+        추운 겨울밤, 팥죽 한 그릇을 뚝딱 비웠습니다.
         """
         st.markdown(styled_text(four_seasons_text, font_size), unsafe_allow_html=True)
 
@@ -520,7 +515,7 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
                 classes = subgroup_model.classes_
                 
                 st.markdown("---")
-                st.subheader("🔍 2단계: 하위 유형 분류")
+                st.subheader("🔍 2단계: 하위 유형 분류 (3대 유형)")
                 st.write(f"가장 유력한 유형은 **[{sub_pred}]** 입니다.")
                 
                 fig = plt.figure(figsize=(4, 4)) 
