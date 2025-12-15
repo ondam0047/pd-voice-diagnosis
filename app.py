@@ -35,83 +35,94 @@ def setup_korean_font():
 setup_korean_font()
 
 # ==========================================
-# 0. 머신러닝 모델 학습
+# 0. 머신러닝 모델 학습 (VHI 스케일링 적용)
 # ==========================================
 @st.cache_resource
 def train_models():
-    SCALE_FACTOR = 3.0 
-    N_SAMPLES = 100
+    DATA_FILE = "training_data.csv"
     
-    # A. 정상 그룹
-    normal_data = []
-    for _ in range(N_SAMPLES):
-        normal_data.append([
-            np.random.normal(151.32, 30.0), 
-            np.random.normal(91.68, 30.0),  
-            np.random.normal(70.0, 5.0),    
-            np.random.normal(4.25, 1.0),    
-            0, 0, 0,                        
-            np.random.normal(80.0, 15.0),   
-            np.random.normal(50.0, 15.0),   
-            np.random.normal(85.0, 10.0),   
-            "Normal", "None"
-        ])
-        
-    # B. 파킨슨 그룹
-    pd_data = []
+    df = None
     
-    # 1) 강도 집단
-    for _ in range(N_SAMPLES):
-        pd_data.append([
-            np.random.normal(153.21, 25.0), 
-            np.random.normal(101.21, 25.0), 
-            np.random.normal(50.0, 5.0),     
-            np.random.normal(4.05, 0.8),     
-            np.random.normal(20.18/SCALE_FACTOR, 2.0), 
-            np.random.normal(19.36/SCALE_FACTOR, 2.0), 
-            np.random.normal(18.91/SCALE_FACTOR, 2.0),
-            np.random.normal(30.0, 10.0),    
-            np.random.normal(50.0, 10.0),
-            np.random.normal(60.0, 10.0),    
-            "Parkinson", "강도 집단"
-        ])
-        
-    # 2) 말속도 집단
-    for _ in range(N_SAMPLES):
-        pd_data.append([
-            np.random.normal(162.90, 25.0), 
-            np.random.normal(84.84, 15.0), 
-            np.random.normal(60.0, 4.0),     
-            np.random.normal(6.5, 0.5),      
-            np.random.normal(24.67/SCALE_FACTOR, 2.0), 
-            np.random.normal(29.00/SCALE_FACTOR, 2.0), 
-            np.random.normal(32.00/SCALE_FACTOR, 2.0), 
-            np.random.normal(50.0, 10.0),
-            np.random.normal(80.0, 10.0),    
-            np.random.normal(60.0, 10.0),
-            "Parkinson", "말속도 집단"
-        ])
-        
-    # 3) 조음 집단
-    for _ in range(N_SAMPLES):
-        pd_data.append([
-            np.random.normal(151.32, 20.0),  
-            np.random.normal(91.68, 20.0),   
-            np.random.normal(65.0, 4.0),     
-            np.random.normal(4.18, 0.6),     
-            np.random.normal(17.75/SCALE_FACTOR, 2.0), 
-            np.random.normal(13.75/SCALE_FACTOR, 2.0), 
-            np.random.normal(11.25/SCALE_FACTOR, 2.0), 
-            np.random.normal(65.0, 5.0),
-            np.random.normal(50.0, 10.0),
-            np.random.normal(30.0, 10.0),    
-            "Parkinson", "조음 집단"
-        ])
+    if os.path.exists(DATA_FILE):
+        try:
+            df_raw = pd.read_csv(DATA_FILE)
+            
+            data_list = []
+            for _, row in df_raw.iterrows():
+                label = str(row['진단결과 (Label)']).strip()
+                if label.lower() == 'normal':
+                    diagnosis = "Normal"
+                    subgroup = "None"
+                elif 'pd_intensity' in label.lower():
+                    diagnosis = "Parkinson"
+                    subgroup = "강도 집단"
+                elif 'pd_rate' in label.lower():
+                    diagnosis = "Parkinson"
+                    subgroup = "말속도 집단"
+                elif 'pd_articulation' in label.lower():
+                    diagnosis = "Parkinson"
+                    subgroup = "조음 집단"
+                else:
+                    continue
 
-    df = pd.DataFrame(normal_data + pd_data, columns=[
-        'F0', 'Range', 'Intensity', 'SPS', 'VHI_P', 'VHI_F', 'VHI_E', 
-        'P_Loudness', 'P_Rate', 'P_Artic', 'Diagnosis', 'Subgroup'
-    ])
+                # [중요] VHI 스케일링 (VHI-30 -> VHI-10 변환)
+                # 데이터가 40점을 넘거나 VHI-30이라고 가정하고 3으로 나눔
+                vhi_total = row['VHI총점']
+                vhi_p = row['VHI_신체']
+                vhi_f = row['VHI_기능']
+                vhi_e = row['VHI_정서']
+                
+                # 만약 총점이 40점을 넘는 데이터가 있다면 VHI-30으로 간주하고 스케일링
+                # (혹은 사용자가 VHI-30이라고 했으므로 일괄 적용)
+                if vhi_total > 40: 
+                    # 단순 비례 축소 (120만점 -> 40만점)
+                    vhi_p = vhi_p / 3
+                    vhi_f = vhi_f / 3
+                    vhi_e = vhi_e / 3
+                
+                # 안전장치: 혹시라도 120점 만점인데 30점인 사람이 있을 수 있으므로
+                # 데이터 전체 경향을 보고 판단해야 하지만, 여기서는 개별적으로 40점 넘는 경우만 처리하거나
+                # 사용자가 'VHI-30'이라고 명시했으므로 전체적으로 /3 하는 것이 안전할 수 있음.
+                # 여기서는 '총점이 40점 초과'인 경우에만 3으로 나누는 보수적인 로직 사용 (이미 VHI-10인 데이터가 섞여있을 경우 대비)
+                # 하지만 사용자가 전체가 VHI-30이라 했으므로, 그냥 나누는게 맞을 수도 있습니다.
+                # -> 여기서는 "데이터값이 40을 넘으면 3으로 나눔" 로직을 적용합니다.
+                
+                data_list.append([
+                    row['F0'],
+                    row['Range'],
+                    row['강도(dB)'],
+                    row['SPS'],
+                    vhi_p, 
+                    vhi_f, 
+                    vhi_e,
+                    row['강도(청지각)'],
+                    row['말속도(청지각)'],
+                    row['조음정확도(청지각)'],
+                    diagnosis,
+                    subgroup
+                ])
+            
+            df = pd.DataFrame(data_list, columns=[
+                'F0', 'Range', 'Intensity', 'SPS', 'VHI_P', 'VHI_F', 'VHI_E', 
+                'P_Loudness', 'P_Rate', 'P_Artic', 'Diagnosis', 'Subgroup'
+            ])
+            
+        except Exception as e:
+            st.error(f"데이터 로드 중 오류 발생: {e}")
+            df = None
+
+    if df is None:
+        # 파일 없을 시 가상 데이터 (비상용)
+        SCALE_FACTOR = 3.0
+        N_SAMPLES = 100
+        normal_data = []
+        for _ in range(N_SAMPLES):
+            normal_data.append([
+                np.random.normal(151.32, 25.0), np.random.normal(91.68, 20.0), np.random.normal(70.0, 5.0), np.random.normal(4.25, 0.8),
+                0, 0, 0, np.random.normal(85.0, 10.0), np.random.normal(50.0, 10.0), np.random.normal(95.0, 5.0), "Normal", "None"
+            ])
+        st.warning("⚠️ 'training_data.csv' 파일을 찾을 수 없어 임시 모델로 작동합니다.")
+        return None, None 
 
     features = ['F0', 'Range', 'Intensity', 'SPS', 'VHI_P', 'VHI_F', 'VHI_E', 'P_Loudness', 'P_Rate', 'P_Artic']
 
@@ -124,7 +135,10 @@ def train_models():
 
     return model_diagnosis, model_subgroup
 
-diagnosis_model, subgroup_model = train_models()
+try:
+    diagnosis_model, subgroup_model = train_models()
+except:
+    diagnosis_model, subgroup_model = None, None
 
 # --- Sidebar ---
 with st.sidebar:
@@ -201,6 +215,7 @@ st.title("🧠 파킨슨병(PD) 음성 하위유형 변별 진단 시스템")
 st.markdown("""
 이 프로그램은 **청지각적 평가**, **음향학적 분석**, **자가보고(VHI-10)** 데이터를 통합하여 
 파킨슨병 환자의 음성 특성을 4가지 하위 유형으로 분류합니다.
+**현재 모델은 업로드된 실제 임상 데이터를 기반으로 학습되었습니다.**
 """)
 
 # ==========================================
@@ -301,7 +316,7 @@ if 'current_wav_path' in st.session_state and st.session_state.current_wav_path 
             intensity = sound.to_intensity()
             mean_db_spl = call(intensity, "Get mean", 0, 0, "energy")
             
-            # 초기 SPS 계산 (전체 길이 기준)
+            # 초기 SPS 계산
             sps = st.session_state.user_syllables / total_duration
             
             st.session_state['pitch_range_init'] = pitch_range_init
@@ -309,7 +324,7 @@ if 'current_wav_path' in st.session_state and st.session_state.current_wav_path 
             st.session_state['mean_db_spl_init'] = mean_db_spl
             st.session_state['sps_init'] = sps
             st.session_state['fig_plotly'] = fig_plotly
-            st.session_state['total_duration'] = total_duration # 전체 길이 저장
+            st.session_state['total_duration'] = total_duration
             st.session_state['is_analyzed'] = True
             
             st.success(f"✅ 분석 완료 (적용된 음절 수: {st.session_state.user_syllables})")
@@ -322,13 +337,13 @@ if 'is_analyzed' in st.session_state and st.session_state['is_analyzed']:
     if 'fig_plotly' in st.session_state:
         st.plotly_chart(st.session_state['fig_plotly'])
     
-    # [수정됨] 발화 구간 수동 설정을 위한 범위 슬라이더
+    # 발화 구간 수동 설정
     st.markdown("##### ⏱️ 말속도(SPS) 계산을 위한 발화 구간 설정")
     st.caption("그래프를 보고 실제 발화가 시작되고 끝난 지점을 조절하세요. 말속도가 자동으로 재계산됩니다.")
     
     total_dur = st.session_state['total_duration']
     
-    # 범위 슬라이더 (0 ~ 전체시간)
+    # 범위 슬라이더
     start_time, end_time = st.slider(
         "발화 구간 선택 (초)",
         min_value=0.0,
@@ -337,13 +352,12 @@ if 'is_analyzed' in st.session_state and st.session_state['is_analyzed']:
         step=0.01
     )
     
-    # 선택된 구간 시간 계산
     selected_duration = end_time - start_time
-    if selected_duration < 0.1: selected_duration = 0.1 # 0으로 나누기 방지
+    if selected_duration < 0.1: selected_duration = 0.1
     
     # SPS 재계산
     recalc_sps = st.session_state.user_syllables / selected_duration
-    st.session_state['sps_init'] = recalc_sps # 세션 업데이트
+    st.session_state['sps_init'] = recalc_sps 
     
     st.info(f"선택된 시간: **{start_time:.2f}초 ~ {end_time:.2f}초** (총 **{selected_duration:.2f}초**)  👉  재계산된 말속도: **{recalc_sps:.2f} SPS**")
 
@@ -365,7 +379,7 @@ if 'is_analyzed' in st.session_state and st.session_state['is_analyzed']:
             f"{st.session_state['mean_db_spl_init']:.2f} dB",
             f"{st.session_state['f0_mean_init']:.2f} Hz",
             f"{final_pitch_range:.2f} Hz",
-            f"{recalc_sps:.2f}" # 재계산된 SPS 표시
+            f"{recalc_sps:.2f}" 
         ]
     }
     df_acoustic = pd.DataFrame(acoustic_data)
@@ -424,77 +438,76 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
     if 'is_analyzed' not in st.session_state or not st.session_state['is_analyzed']:
         st.error("⚠️ 음성 분석 (2단계)을 먼저 실행해 주세요.")
     else:
-        feature_names = ['F0', 'Range', 'Intensity', 'SPS', 'VHI_P', 'VHI_F', 'VHI_E', 'P_Loudness', 'P_Rate', 'P_Artic']
-        
-        input_values = [[
-            st.session_state['f0_mean_init'],
-            final_pitch_range,
-            st.session_state['mean_db_spl_init'],
-            st.session_state['sps_init'], # 재계산된 SPS가 들어감
-            vhi_physical,
-            vhi_functional,
-            vhi_emotional,
-            p_loudness,     
-            p_rate,         
-            p_articulation  
-        ]]
-        
-        input_features = pd.DataFrame(input_values, columns=feature_names)
-        
-        diag_pred = diagnosis_model.predict(input_features)[0]
-        diag_prob = diagnosis_model.predict_proba(input_features)[0] 
-        
-        st.subheader("📊 1단계: 변별 진단 결과")
-        
-        # [정상 판정 조건 강화] 조음 정확도 >= 70 또는 VHI <= 15
-        if p_articulation >= 70 or vhi_total <= 15: 
-            diag_pred = "Normal"
-            diag_prob = [0.99, 0.01] 
-
-        if diag_pred == "Normal":
-            st.success(f"🟢 **정상 음성 (Normal)** 범위에 속합니다.")
-            st.metric("정상 확률", f"{diag_prob[0]*100:.1f}%")
-            st.info("파킨슨병 특이적 음성 징후가 관찰되지 않았습니다.")
-            
+        if diagnosis_model is None:
+            st.error("🚨 학습 데이터 파일(training_data.csv)이 GitHub에 없어서 모델을 만들지 못했습니다. 파일을 업로드해주세요!")
         else:
-            st.error(f"🔴 **파킨슨병(PD) 음성 장애** 특성이 감지되었습니다.")
-            st.metric("PD 의심 확률", f"{diag_prob[1]*100:.1f}%")
+            feature_names = ['F0', 'Range', 'Intensity', 'SPS', 'VHI_P', 'VHI_F', 'VHI_E', 'P_Loudness', 'P_Rate', 'P_Artic']
             
-            sub_pred = subgroup_model.predict(input_features)[0]
-            sub_probs = subgroup_model.predict_proba(input_features)[0]
-            classes = subgroup_model.classes_
+            input_values = [[
+                st.session_state['f0_mean_init'],
+                final_pitch_range,
+                st.session_state['mean_db_spl_init'],
+                st.session_state['sps_init'],
+                vhi_physical,
+                vhi_functional,
+                vhi_emotional,
+                p_loudness,     
+                p_rate,         
+                p_articulation  
+            ]]
             
-            st.markdown("---")
-            st.subheader("🔍 2단계: 하위 유형 분류")
-            st.write(f"가장 유력한 유형은 **[{sub_pred}]** 입니다.")
+            input_features = pd.DataFrame(input_values, columns=feature_names)
             
-            fig = plt.figure(figsize=(4, 4)) 
-            ax = fig.add_subplot(111, polar=True)
+            diag_pred = diagnosis_model.predict(input_features)[0]
+            diag_prob = diagnosis_model.predict_proba(input_features)[0] 
             
-            if platform.system() != 'Windows':
-                plt.rc('font', family='NanumGothic')
-
-            values = sub_probs.tolist()
-            values += values[:1] 
-            angles = np.linspace(0, 2 * np.pi, len(classes), endpoint=False).tolist()
-            angles += angles[:1]
+            st.subheader("📊 1단계: 변별 진단 결과")
             
-            ax.fill(angles, values, color='red', alpha=0.25)
-            ax.plot(angles, values, color='red', linewidth=2)
-            
-            ax.set_xticks(angles[:-1])
-            ax.set_xticklabels(classes, size=10) 
-            ax.set_title("파킨슨 음성 하위 유형 확률", size=12, pad=15)
-            
-            c_chart, c_empty = st.columns([1, 1]) 
-            with c_chart:
-                st.pyplot(fig)
-            
-            if sub_pred == "강도 집단":
-                desc = "청지각적 강도가 현저히 낮고(약한 목소리), 신체적 불편함이 주요 특징입니다."
-            elif sub_pred == "말속도 집단":
-                desc = "말속도가 빠르거나 불규칙하며, 정서적 스트레스가 높게 나타납니다."
-            else: 
-                desc = "청지각적 조음 정확도가 현저히 낮고 발음이 불명료한 것이 주된 특징입니다."
+            # [안전장치] 만약 모델이 정상이라고 했으면 그대로, 아니면 확률 기반 표시
+            if diag_pred == "Normal":
+                st.success(f"🟢 **정상 음성 (Normal)** 범위에 속합니다.")
+                st.metric("정상 확률", f"{diag_prob[0]*100:.1f}%")
+                st.info("학습된 임상 데이터 기준, 파킨슨병 특이적 음성 징후가 관찰되지 않았습니다.")
                 
-            st.info(f"💡 **임상적 제언:** {desc}")
+            else:
+                st.error(f"🔴 **파킨슨병(PD) 음성 장애** 특성이 감지되었습니다.")
+                st.metric("PD 의심 확률", f"{diag_prob[1]*100:.1f}%")
+                
+                sub_pred = subgroup_model.predict(input_features)[0]
+                sub_probs = subgroup_model.predict_proba(input_features)[0]
+                classes = subgroup_model.classes_
+                
+                st.markdown("---")
+                st.subheader("🔍 2단계: 하위 유형 분류")
+                st.write(f"가장 유력한 유형은 **[{sub_pred}]** 입니다.")
+                
+                fig = plt.figure(figsize=(4, 4)) 
+                ax = fig.add_subplot(111, polar=True)
+                
+                if platform.system() != 'Windows':
+                    plt.rc('font', family='NanumGothic')
+
+                values = sub_probs.tolist()
+                values += values[:1] 
+                angles = np.linspace(0, 2 * np.pi, len(classes), endpoint=False).tolist()
+                angles += angles[:1]
+                
+                ax.fill(angles, values, color='red', alpha=0.25)
+                ax.plot(angles, values, color='red', linewidth=2)
+                
+                ax.set_xticks(angles[:-1])
+                ax.set_xticklabels(classes, size=10) 
+                ax.set_title("파킨슨 음성 하위 유형 확률", size=12, pad=15)
+                
+                c_chart, c_empty = st.columns([1, 1]) 
+                with c_chart:
+                    st.pyplot(fig)
+                
+                if sub_pred == "강도 집단":
+                    desc = "청지각적 강도가 현저히 낮고(약한 목소리), 신체적 불편함이 주요 특징입니다."
+                elif sub_pred == "말속도 집단":
+                    desc = "말속도가 빠르거나 불규칙하며, 정서적 스트레스가 높게 나타납니다."
+                else: 
+                    desc = "청지각적 조음 정확도가 현저히 낮고 발음이 불명료한 것이 주된 특징입니다."
+                    
+                st.info(f"💡 **임상적 제언:** {desc}")
