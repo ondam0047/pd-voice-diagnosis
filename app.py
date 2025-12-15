@@ -35,13 +35,14 @@ def setup_korean_font():
 setup_korean_font()
 
 # ==========================================
-# 0. 머신러닝 모델 학습 (만능 파일 로더 적용)
+# 0. 머신러닝 모델 학습
 # ==========================================
 @st.cache_resource
 def train_models():
     DATA_FILE = "training_data.csv"
     df = None
     
+    # 1. 데이터 로드 (인코딩 자동 감지)
     if os.path.exists(DATA_FILE):
         loaders = [
             (lambda f: pd.read_csv(f, encoding='utf-8'), "utf-8"),
@@ -113,6 +114,7 @@ def train_models():
             st.error("❌ 데이터 파일을 읽을 수 없습니다.")
 
     if df is None:
+        # 비상용 가상 데이터
         N_SAMPLES = 50
         normal_data = []
         for _ in range(N_SAMPLES):
@@ -130,7 +132,7 @@ def train_models():
             'F0', 'Range', 'Intensity', 'SPS', 'VHI_P', 'VHI_F', 'VHI_E', 
             'P_Loudness', 'P_Rate', 'P_Artic', 'Diagnosis', 'Subgroup'
         ])
-        st.warning("⚠️ 학습 데이터 파일 로드 실패. 임시 모델로 작동합니다.")
+        st.warning("⚠️ 학습 데이터 로드 실패. 임시 모델 사용.")
 
     features = ['F0', 'Range', 'Intensity', 'SPS', 'VHI_P', 'VHI_F', 'VHI_E', 'P_Loudness', 'P_Rate', 'P_Artic']
 
@@ -164,7 +166,7 @@ with st.sidebar:
 TEMP_FILENAME = "temp_for_analysis.wav"
 
 # ==========================================
-# 피치 컨투어 시각화 함수 (Plotly)
+# 피치 컨투어 시각화 함수
 # ==========================================
 def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
     try:
@@ -222,7 +224,7 @@ def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
 st.title("🧠 파킨슨병(PD) 음성 하위유형 변별 진단 시스템")
 st.markdown("""
 이 프로그램은 **청지각적 평가**, **음향학적 분석**, **자가보고(VHI-10)** 데이터를 통합하여 
-파킨슨병 환자의 음성 특성을 4가지 하위 유형으로 분류합니다.
+파킨슨병 환자의 음성 특성을 **3가지 하위 유형(강도/말속도/조음 집단)**으로 분류합니다.
 **현재 모델은 업로드된 실제 임상 데이터를 기반으로 학습되었습니다.**
 """)
 
@@ -237,14 +239,56 @@ if 'current_wav_path' in st.session_state:
     current_wav_path = st.session_state.current_wav_path
 
 if 'user_syllables' not in st.session_state:
-    st.session_state.user_syllables = 69 
+    st.session_state.user_syllables = 75 # 기본값 (4문장 기준)
 
 # [Tab 1] 마이크 녹음
 with tab1:
-    st.markdown("##### 마이크 녹음 (시작/중지)")
-    st.caption("아래 마이크 아이콘을 눌러 녹음을 시작하고, 완료되면 정지 버튼을 누르세요.")
+    st.markdown("##### 📜 낭독 문단 선택")
     
-    syllables_rec = st.number_input("낭독 문단의 총 음절 수", min_value=1, value=69, key="syllables_rec")
+    # 글자 크기 조절
+    font_size = st.slider("🔍 글자 크기 조절", min_value=15, max_value=50, value=25)
+    
+    def styled_text(text, size):
+        return f"""
+        <div style="
+            font-size: {size}px; 
+            line-height: 1.6; 
+            border: 1px solid #ddd; 
+            padding: 20px; 
+            border-radius: 10px; 
+            background-color: #f9f9f9;
+            color: #333;">
+            {text}
+        </div>
+        """
+
+    # [문단 1] 산책 문단
+    with st.expander("📖 [1] 산책 문단 (일반용) - 클릭해서 열기"):
+        st.caption("✅ 권장 총 음절 수: **69개** (아래 입력창에 69를 입력하세요)")
+        san_chaek_text = """
+        높은 산에 올라가 맑은 공기를 마시며 소리를 지르면 가슴이 활짝 열리는 듯하다.<br><br>
+        바닷가에 나가 조개를 주으며 넓게 펼쳐있는 바다를 바라보면 내 마음 역시 넓어지는 것 같다.
+        """
+        st.markdown(styled_text(san_chaek_text, font_size), unsafe_allow_html=True)
+
+    # [문단 2] 4계절의 소리 (정밀 진단용) - 4문장으로 복구됨
+    with st.expander("🔎 [2] 사계절의 소리 (정밀 진단용) - 클릭해서 열기"):
+        st.caption("✅ 권장 총 음절 수: **75개** (아래 입력창에 75를 입력하세요)")
+        four_seasons_text = """
+        <strong>따뜻한 봄바람</strong>이 불면 <strong>빨간 튤립</strong>이 <strong>톡톡</strong> 터집니다.<br>
+        (입술과 혀끝 힘 확인)<br><br>
+        <strong>파란 파도</strong>가 <strong>바닷가 바위</strong>를 덮칩니다.<br>
+        (조음 교대 운동 확인)<br><br>
+        <strong>높은</strong> 하늘 아래 <strong>단풍잎</strong>이 <strong>뚝뚝</strong> 떨어집니다.<br>
+        (말속도 변화 확인)<br><br>
+        추운 겨울밤, <strong>팥죽</strong> 한 그릇을 <strong>뚝딱</strong> 비웠습니다.<br>
+        (종합 조음 능력 확인)
+        """
+        st.markdown(styled_text(four_seasons_text, font_size), unsafe_allow_html=True)
+
+    st.markdown("---")
+    
+    syllables_rec = st.number_input("낭독한 문단의 총 음절 수 (위 권장 수치 참고)", min_value=1, value=75, key="syllables_rec")
     st.session_state.user_syllables = syllables_rec
 
     audio_buffer = st.audio_input("녹음하기", label_visibility="collapsed")
@@ -269,7 +313,7 @@ with tab1:
 with tab2:
     st.markdown("##### 기존 WAV 파일 업로드")
     
-    syllables_up = st.number_input("낭독 문단의 총 음절 수 (업로드 파일용)", min_value=1, value=69, key="syllables_up")
+    syllables_up = st.number_input("낭독 문단의 총 음절 수 (업로드 파일용)", min_value=1, value=75, key="syllables_up")
     uploaded_file = st.file_uploader("WAV 파일을 선택하세요", type=["wav"], key="file_uploader")
     
     if uploaded_file is not None:
@@ -359,19 +403,14 @@ if 'is_analyzed' in st.session_state and st.session_state['is_analyzed']:
     st.session_state['sps_init'] = recalc_sps 
     st.info(f"선택된 시간: **{start_time:.2f}초 ~ {end_time:.2f}초** (총 **{selected_duration:.2f}초**)  👉  재계산된 말속도: **{recalc_sps:.2f} SPS**")
 
-    # [수정됨] 강도 보정 및 음도 범위 보정 슬라이더 (2단 구성)
     st.markdown("---")
     st.markdown("##### 🎚️ 기기적 측정값 보정 (Calibration)")
     
     c1, c2 = st.columns(2)
-    
     with c1:
-        # 강도 보정 슬라이더 (기본값을 -10으로 설정하여 너무 높게 나오는 것을 방지)
-        db_offset = st.slider("🔊 강도(dB) 보정", -50.0, 50.0, -10.0, 1.0, help="녹음 환경에 따라 측정값이 너무 높거나 낮을 경우 조절하세요.")
+        db_offset = st.slider("🔊 강도(dB) 보정", -50.0, 50.0, -10.0, 1.0)
         final_db = st.session_state['mean_db_spl_init'] + db_offset
-        
     with c2:
-        # 음도 범위 보정
         slider_min, slider_max = 0.0, 300.0
         default_val = st.session_state['pitch_range_init']
         if default_val > slider_max: default_val = slider_max
@@ -450,8 +489,8 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
             input_values = [[
                 st.session_state['f0_mean_init'],
                 final_pitch_range,
-                final_db, # [중요] 보정된 강도값 사용
-                recalc_sps, # [중요] 재계산된 SPS 사용
+                final_db, 
+                recalc_sps, 
                 vhi_physical,
                 vhi_functional,
                 vhi_emotional,
