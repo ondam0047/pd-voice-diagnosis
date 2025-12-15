@@ -42,7 +42,6 @@ def train_models():
     DATA_FILE = "training_data.csv"
     df = None
     
-    # 1. 데이터 로드 (인코딩 자동 감지)
     if os.path.exists(DATA_FILE):
         loaders = [
             (lambda f: pd.read_csv(f, encoding='utf-8'), "utf-8"),
@@ -239,13 +238,12 @@ if 'current_wav_path' in st.session_state:
     current_wav_path = st.session_state.current_wav_path
 
 if 'user_syllables' not in st.session_state:
-    st.session_state.user_syllables = 75 # 기본값 (4문장 기준)
+    st.session_state.user_syllables = 75 # 기본값 (4문장)
 
 # [Tab 1] 마이크 녹음
 with tab1:
     st.markdown("##### 📜 낭독 문단 선택")
     
-    # 글자 크기 조절
     font_size = st.slider("🔍 글자 크기 조절", min_value=15, max_value=50, value=28)
     
     def styled_text(text, size):
@@ -519,30 +517,38 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
                 st.subheader("🔍 2단계: 하위 유형 분류 (3대 유형)")
                 st.write(f"가장 유력한 유형은 **[{sub_pred}]** 입니다.")
                 
-                # [수정] 원형 차트 (Pie Chart)로 변경
-                fig, ax = plt.subplots(figsize=(5, 5))
+                # [레이더 차트 + 퍼센트 표시]
+                fig = plt.figure(figsize=(5, 5))
+                ax = fig.add_subplot(111, polar=True)
                 
-                # 색상 팔레트 (파스텔 톤)
-                colors = ['#ff9999', '#66b3ff', '#99ff99']
+                # 데이터 준비 (폐곡선 만들기)
+                values = sub_probs.tolist()
+                values += values[:1] 
                 
-                # 파이 차트 그리기
-                wedges, texts, autotexts = ax.pie(
-                    sub_probs, 
-                    labels=classes, 
-                    autopct='%1.1f%%', 
-                    startangle=90, 
-                    colors=colors[:len(classes)],
-                    textprops={'fontsize': 12, 'weight': 'bold'}
-                )
+                angles = np.linspace(0, 2 * np.pi, len(classes), endpoint=False).tolist()
+                angles += angles[:1]
+                
+                # 그리기
+                ax.plot(angles, values, linewidth=2, linestyle='solid', color='red')
+                ax.fill(angles, values, 'red', alpha=0.25)
+                
+                # 라벨에 퍼센트 추가 (핵심)
+                labels_with_pct = [f"{cls}\n({prob*100:.1f}%)" for cls, prob in zip(classes, sub_probs)]
+                
+                ax.set_xticks(angles[:-1])
+                ax.set_xticklabels(labels_with_pct, size=11, fontweight='bold')
+                
+                # y축 설정 (0~100% 범위가 꽉 차 보이게)
+                ax.set_ylim(0, 1)
+                ax.set_yticks([0.2, 0.4, 0.6, 0.8])
+                ax.set_yticklabels([]) # 숫자 숨김 (깔끔하게)
                 
                 ax.set_title("파킨슨 음성 하위 유형 확률 분포", size=14, pad=20)
                 
-                # 차트 표시
                 c_chart, c_empty = st.columns([1, 1]) 
                 with c_chart:
                     st.pyplot(fig)
                 
-                # 임상적 제언 (가장 확률 높은 유형 기준)
                 if sub_pred == "강도 집단":
                     desc = "청지각적 강도가 현저히 낮고(약한 목소리), 신체적 불편함이 주요 특징입니다."
                 elif sub_pred == "말속도 집단":
