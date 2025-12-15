@@ -80,6 +80,7 @@ def train_models():
                     else:
                         continue
 
+                    # VHI 스케일링
                     vhi_total = row['VHI총점']
                     vhi_p = row['VHI_신체']
                     vhi_f = row['VHI_기능']
@@ -122,6 +123,7 @@ def train_models():
             st.error("❌ 데이터 파일을 읽을 수 없습니다.")
 
     if df is None:
+        # 비상용 가상 데이터
         N_SAMPLES = 50
         normal_data = []
         for _ in range(N_SAMPLES):
@@ -180,7 +182,7 @@ TEMP_FILENAME = "temp_for_analysis.wav"
 def auto_detect_smr_events(sound_path, top_n=10):
     try:
         sound = parselmouth.Sound(sound_path)
-        intensity = sound.to_intensity(time_step=0.005)
+        intensity = sound.to_intensity(time_step=0.005) # 5ms
         times = intensity.xs()
         values = intensity.values[0, :]
         
@@ -215,7 +217,7 @@ def auto_detect_smr_events(sound_path, top_n=10):
         return [], 0
 
 # ==========================================
-# [함수] 피치 컨투어 시각화
+# [함수] 피치 컨투어 시각화 & Outlier 제거 (핵심)
 # ==========================================
 def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
     try:
@@ -227,21 +229,40 @@ def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
         n_points = len(pitch_values)
         time_array = np.linspace(0, duration, n_points)
         
+        # 0이 아닌 값(유성음) 추출
         valid_indices = pitch_values != 0
         valid_times = time_array[valid_indices]
         valid_pitch = pitch_values[valid_indices]
 
+        # [Outlier Removal Logic]
         if len(valid_pitch) > 0:
             median_f0 = np.median(valid_pitch)
-            clean_mask = (valid_pitch <= median_f0 + 3 * np.std(valid_pitch)) & (valid_pitch >= median_f0 - 3 * np.std(valid_pitch))
+            std_f0 = np.std(valid_pitch)
+            
+            # 중앙값 기준 3 표준편차 범위를 벗어나면 제거 (Doubling/Halving 방지)
+            upper_limit = median_f0 + 3 * std_f0
+            lower_limit = median_f0 - 3 * std_f0
+            
+            # 절대적 최소/최대 범위도 한 번 더 체크 (75~300Hz)
+            clean_mask = (valid_pitch <= upper_limit) & (valid_pitch >= lower_limit) & \
+                         (valid_pitch <= f0_max) & (valid_pitch >= f0_min)
+            
             final_times = valid_times[clean_mask]
             final_pitch = valid_pitch[clean_mask]
-            cleaned_mean_f0 = np.mean(final_pitch)
+            
+            if len(final_pitch) > 0:
+                cleaned_mean_f0 = np.mean(final_pitch)
+                cleaned_range = np.max(final_pitch) - np.min(final_pitch)
+            else:
+                cleaned_mean_f0 = 0
+                cleaned_range = 0
         else:
             final_times = valid_times
             final_pitch = valid_pitch
             cleaned_mean_f0 = 0
+            cleaned_range = 0
 
+        # 그래프 그리기
         fig = go.Figure()
         fig.add_trace(go.Scatter(
             x=final_times, y=final_pitch,
@@ -249,16 +270,25 @@ def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
             marker=dict(size=4, color='red'),
             hovertemplate='시간: %{x:.2f}초<br>음도: %{y:.1f}Hz'
         ))
+        
+        # 평균선 추가
+        if cleaned_mean_f0 > 0:
+            fig.add_trace(go.Scatter(
+                x=[0, duration], y=[cleaned_mean_f0, cleaned_mean_f0],
+                mode='lines', name=f'평균 ({cleaned_mean_f0:.1f}Hz)',
+                line=dict(color='gray', dash='dash')
+            ))
+
         fig.update_layout(
-            title=f"음도 컨투어 (Pitch Contour)",
+            title=f"음도 컨투어 (Outlier 제거됨)",
             xaxis_title="시간 (초)", yaxis_title="음도 (Hz)",
-            yaxis=dict(range=[0, 300]),
+            yaxis=dict(range=[0, 350]), # Y축 고정
             height=300, margin=dict(l=20, r=20, t=40, b=20),
             showlegend=True
         )
-        return fig, cleaned_mean_f0, duration
+        return fig, cleaned_mean_f0, cleaned_range, duration
     except Exception as e:
-        return None, 0, 0
+        return None, 0, 0, 0
 
 # --- 제목 ---
 st.title("🧠 파킨슨병(PD) 음성 하위유형 변별 진단 시스템")
@@ -312,15 +342,10 @@ st.session_state.user_syllables = syllables_rec
 if st.button("🛠️ 음성 분석 실행", key="btn_anal_main"):
     if 'current_wav_path' in st.session_state:
         try:
-            # 1. 기본 음향 분석
-            fig_plotly, f0_mean, dur = plot_pitch_contour_plotly(st.session_state.current_wav_path, 75, 300)
+            # 1. 기본 음향 분석 (Cleaned F0 & Range 받기)
+            fig_plotly, clean_f0, clean_range, dur = plot_pitch_contour_plotly(st.session_state.current_wav_path, 75, 300)
             
             sound = parselmouth.Sound(st.session_state.current_wav_path)
-            pitch = call(sound, "To Pitch", 0.0, 75, 300)
-            pitch_vals = pitch.selected_array['frequency']
-            valid_p = pitch_vals[pitch_vals != 0]
-            pitch_range = np.max(valid_p) - np.min(valid_p) if len(valid_p) > 0 else 0
-            
             intensity = sound.to_intensity()
             mean_db = call(intensity, "Get mean", 0, 0, "energy")
             
@@ -331,9 +356,13 @@ if st.button("🛠️ 음성 분석 실행", key="btn_anal_main"):
             
             # 세션 저장
             st.session_state.update({
-                'f0_mean': f0_mean, 'pitch_range': pitch_range,
-                'mean_db': mean_db, 'sps': sps, 'duration': dur,
-                'fig_plotly': fig_plotly, 'is_analyzed': True,
+                'f0_mean': clean_f0,        # Outlier 제거된 값
+                'pitch_range': clean_range, # Outlier 제거된 값
+                'mean_db': mean_db, 
+                'sps': sps, 
+                'duration': dur,
+                'fig_plotly': fig_plotly, 
+                'is_analyzed': True,
                 'smr_events': smr_events
             })
             
@@ -359,7 +388,8 @@ if 'is_analyzed' in st.session_state and st.session_state['is_analyzed']:
         db_adj = st.slider("강도(dB) 보정", -50.0, 50.0, -10.0, 1.0)
         final_db = st.session_state['mean_db'] + db_adj
         
-        range_adj = st.slider("음도범위(Hz) 보정", 0.0, 300.0, st.session_state['pitch_range'], 0.1)
+        # Range도 보정 가능하게 (기본값은 Cleaned Range)
+        range_adj = st.slider("음도범위(Hz) 보정", 0.0, 300.0, float(st.session_state['pitch_range']), 0.1)
         
         st.markdown("---")
         st.caption("⏱️ **말속도(SPS) 발화 구간 선택**")
@@ -378,7 +408,7 @@ if 'is_analyzed' in st.session_state and st.session_state['is_analyzed']:
         })
         st.dataframe(res_df, hide_index=True)
 
-    # 2) SMR 단어 자동 분석 결과
+    # 2) SMR 단어 자동 분석 결과 (1~10번)
     st.markdown("---")
     st.markdown("### 🔎 SMR 핵심 단어 자동 분석 (1번 ~ 10번)")
     st.info("AI가 녹음된 파일에서 **조음(폐쇄/파열)이 발생하는 주요 구간 10곳**을 자동으로 추출했습니다.")
