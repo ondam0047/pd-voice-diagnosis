@@ -42,6 +42,7 @@ def train_models():
     DATA_FILE = "training_data.csv"
     df = None
     
+    # 1. 데이터 로드 (인코딩 자동 감지)
     if os.path.exists(DATA_FILE):
         loaders = [
             (lambda f: pd.read_csv(f, encoding='utf-8'), "utf-8"),
@@ -238,7 +239,7 @@ if 'current_wav_path' in st.session_state:
     current_wav_path = st.session_state.current_wav_path
 
 if 'user_syllables' not in st.session_state:
-    st.session_state.user_syllables = 75 
+    st.session_state.user_syllables = 75 # 기본값 (4문장 기준)
 
 # [Tab 1] 마이크 녹음
 with tab1:
@@ -270,7 +271,7 @@ with tab1:
         """
         st.markdown(styled_text(san_chaek_text, font_size), unsafe_allow_html=True)
 
-    # [문단 2] 사계절의 소리 (수정됨: 줄글 형태)
+    # [문단 2] 사계절의 소리
     with st.expander("🔎 [2] 사계절의 소리 (정밀 진단용) - 클릭해서 열기"):
         st.caption("✅ 권장 총 음절 수: **75개** (아래 입력창에 75를 입력하세요)")
         four_seasons_text = """
@@ -518,28 +519,30 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
                 st.subheader("🔍 2단계: 하위 유형 분류 (3대 유형)")
                 st.write(f"가장 유력한 유형은 **[{sub_pred}]** 입니다.")
                 
-                fig = plt.figure(figsize=(4, 4)) 
-                ax = fig.add_subplot(111, polar=True)
+                # [수정] 원형 차트 (Pie Chart)로 변경
+                fig, ax = plt.subplots(figsize=(5, 5))
                 
-                if platform.system() != 'Windows':
-                    plt.rc('font', family='NanumGothic')
-
-                values = sub_probs.tolist()
-                values += values[:1] 
-                angles = np.linspace(0, 2 * np.pi, len(classes), endpoint=False).tolist()
-                angles += angles[:1]
+                # 색상 팔레트 (파스텔 톤)
+                colors = ['#ff9999', '#66b3ff', '#99ff99']
                 
-                ax.fill(angles, values, color='red', alpha=0.25)
-                ax.plot(angles, values, color='red', linewidth=2)
+                # 파이 차트 그리기
+                wedges, texts, autotexts = ax.pie(
+                    sub_probs, 
+                    labels=classes, 
+                    autopct='%1.1f%%', 
+                    startangle=90, 
+                    colors=colors[:len(classes)],
+                    textprops={'fontsize': 12, 'weight': 'bold'}
+                )
                 
-                ax.set_xticks(angles[:-1])
-                ax.set_xticklabels(classes, size=10) 
-                ax.set_title("파킨슨 음성 하위 유형 확률", size=12, pad=15)
+                ax.set_title("파킨슨 음성 하위 유형 확률 분포", size=14, pad=20)
                 
+                # 차트 표시
                 c_chart, c_empty = st.columns([1, 1]) 
                 with c_chart:
                     st.pyplot(fig)
                 
+                # 임상적 제언 (가장 확률 높은 유형 기준)
                 if sub_pred == "강도 집단":
                     desc = "청지각적 강도가 현저히 낮고(약한 목소리), 신체적 불편함이 주요 특징입니다."
                 elif sub_pred == "말속도 집단":
