@@ -35,19 +35,19 @@ def setup_korean_font():
 setup_korean_font()
 
 # ==========================================
-# 0. 머신러닝 모델 학습 (VHI-30 -> VHI-10 자동 변환)
+# 0. 머신러닝 모델 학습 (만능 파일 로더 적용)
 # ==========================================
 @st.cache_resource
 def train_models():
     DATA_FILE = "training_data.csv"
     df = None
     
-    # 1. 데이터 파일 로드 (인코딩 자동 감지)
     if os.path.exists(DATA_FILE):
         loaders = [
             (lambda f: pd.read_csv(f, encoding='utf-8'), "utf-8"),
             (lambda f: pd.read_csv(f, encoding='cp949'), "cp949"),
-            (lambda f: pd.read_csv(f, encoding='euc-kr'), "euc-kr")
+            (lambda f: pd.read_csv(f, encoding='euc-kr'), "euc-kr"),
+            (lambda f: pd.read_excel(f), "excel")
         ]
         
         df_raw = None
@@ -64,7 +64,6 @@ def train_models():
                 for _, row in df_raw.iterrows():
                     label = str(row['진단결과 (Label)']).strip()
                     
-                    # 라벨링
                     if label.lower() == 'normal':
                         diagnosis = "Normal"
                         subgroup = "None"
@@ -80,13 +79,17 @@ def train_models():
                     else:
                         continue
 
-                    # [중요] VHI 스케일링 (Training Data는 VHI-30이므로 3으로 나눔)
-                    # 사용자 입력(App)은 VHI-10이므로 단위를 맞춰줍니다.
-                    vhi_p = row['VHI_신체'] / 3.0
-                    vhi_f = row['VHI_기능'] / 3.0
-                    vhi_e = row['VHI_정서'] / 3.0
+                    # VHI 스케일링
+                    vhi_total = row['VHI총점']
+                    vhi_p = row['VHI_신체']
+                    vhi_f = row['VHI_기능']
+                    vhi_e = row['VHI_정서']
                     
-                    # 결측치 처리
+                    if vhi_total > 40: 
+                        vhi_p = vhi_p / 3
+                        vhi_f = vhi_f / 3
+                        vhi_e = vhi_e / 3
+                    
                     p_loud = row['강도(청지각)'] if pd.notnull(row['강도(청지각)']) else 0
                     p_rate = row['말속도(청지각)'] if pd.notnull(row['말속도(청지각)']) else 0
                     p_artic = row['조음정확도(청지각)'] if pd.notnull(row['조음정확도(청지각)']) else 0
@@ -107,9 +110,8 @@ def train_models():
                 st.error(f"데이터 전처리 오류: {e}")
                 df = None
         else:
-            st.error("❌ 데이터 파일을 읽을 수 없습니다. (인코딩 문제)")
+            st.error("❌ 데이터 파일을 읽을 수 없습니다.")
 
-    # 2. 파일 없을 시 가상 데이터 사용 (비상용)
     if df is None:
         N_SAMPLES = 50
         normal_data = []
@@ -130,7 +132,6 @@ def train_models():
         ])
         st.warning("⚠️ 학습 데이터 파일 로드 실패. 임시 모델로 작동합니다.")
 
-    # 3. 모델 학습
     features = ['F0', 'Range', 'Intensity', 'SPS', 'VHI_P', 'VHI_F', 'VHI_E', 'P_Loudness', 'P_Rate', 'P_Artic']
 
     model_diagnosis = RandomForestClassifier(n_estimators=200, random_state=42)
@@ -142,7 +143,6 @@ def train_models():
 
     return model_diagnosis, model_subgroup
 
-# 모델 로드
 try:
     diagnosis_model, subgroup_model = train_models()
 except:
@@ -320,11 +320,11 @@ if 'current_wav_path' in st.session_state and st.session_state.current_wav_path 
             else:
                 pitch_range_init = 0
 
-            # 3. Intensity, SPS
+            # 3. Intensity
             intensity = sound.to_intensity()
             mean_db_spl = call(intensity, "Get mean", 0, 0, "energy")
             
-            # 초기 SPS 계산
+            # SPS
             sps = st.session_state.user_syllables / total_duration
             
             st.session_state['pitch_range_init'] = pitch_range_init
@@ -347,53 +347,49 @@ if 'is_analyzed' in st.session_state and st.session_state['is_analyzed']:
     
     # 발화 구간 수동 설정
     st.markdown("##### ⏱️ 말속도(SPS) 계산을 위한 발화 구간 설정")
-    st.caption("그래프를 보고 실제 발화가 시작되고 끝난 지점을 조절하세요. 말속도가 자동으로 재계산됩니다.")
-    
     total_dur = st.session_state['total_duration']
-    
-    # 범위 슬라이더
     start_time, end_time = st.slider(
         "발화 구간 선택 (초)",
-        min_value=0.0,
-        max_value=float(total_dur),
-        value=(0.0, float(total_dur)),
-        step=0.01
+        min_value=0.0, max_value=float(total_dur),
+        value=(0.0, float(total_dur)), step=0.01
     )
-    
     selected_duration = end_time - start_time
     if selected_duration < 0.1: selected_duration = 0.1
-    
-    # SPS 재계산
     recalc_sps = st.session_state.user_syllables / selected_duration
     st.session_state['sps_init'] = recalc_sps 
-    
     st.info(f"선택된 시간: **{start_time:.2f}초 ~ {end_time:.2f}초** (총 **{selected_duration:.2f}초**)  👉  재계산된 말속도: **{recalc_sps:.2f} SPS**")
 
-    # 음도 범위 보정 슬라이더
-    col_adj1, col_adj2 = st.columns([2, 1])
-    with col_adj1:
+    # [수정됨] 강도 보정 및 음도 범위 보정 슬라이더 (2단 구성)
+    st.markdown("---")
+    st.markdown("##### 🎚️ 기기적 측정값 보정 (Calibration)")
+    
+    c1, c2 = st.columns(2)
+    
+    with c1:
+        # 강도 보정 슬라이더 (기본값을 -10으로 설정하여 너무 높게 나오는 것을 방지)
+        db_offset = st.slider("🔊 강도(dB) 보정", -50.0, 50.0, -10.0, 1.0, help="녹음 환경에 따라 측정값이 너무 높거나 낮을 경우 조절하세요.")
+        final_db = st.session_state['mean_db_spl_init'] + db_offset
+        
+    with c2:
+        # 음도 범위 보정
         slider_min, slider_max = 0.0, 300.0
         default_val = st.session_state['pitch_range_init']
         if default_val > slider_max: default_val = slider_max
         if default_val < slider_min: default_val = slider_min
-            
-        final_pitch_range = st.slider("최종 음도 범위 (Hz) 보정", slider_min, slider_max, default_val, 0.1)
+        final_pitch_range = st.slider("🎵 음도 범위(Range) 보정", slider_min, slider_max, default_val, 0.1)
     
     st.markdown("#### 📊 최종 음향 분석 지표")
-    
     acoustic_data = {
         "지표명": ["강도 (dB)", "음도 (F0)", "음도 범위", "말속도 (SPS)"],
         "값": [
-            f"{st.session_state['mean_db_spl_init']:.2f} dB",
+            f"{final_db:.2f} dB (보정됨)",
             f"{st.session_state['f0_mean_init']:.2f} Hz",
             f"{final_pitch_range:.2f} Hz",
             f"{recalc_sps:.2f}" 
         ]
     }
     df_acoustic = pd.DataFrame(acoustic_data)
-    c_table, c_dummy = st.columns([1, 2])
-    with c_table:
-        st.dataframe(df_acoustic, hide_index=True)
+    st.dataframe(df_acoustic, hide_index=True)
 
 # ==========================================
 # 3. 청지각적 및 자가보고 평가
@@ -454,8 +450,8 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
             input_values = [[
                 st.session_state['f0_mean_init'],
                 final_pitch_range,
-                st.session_state['mean_db_spl_init'],
-                st.session_state['sps_init'],
+                final_db, # [중요] 보정된 강도값 사용
+                recalc_sps, # [중요] 재계산된 SPS 사용
                 vhi_physical,
                 vhi_functional,
                 vhi_emotional,
@@ -470,8 +466,6 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
             diag_prob = diagnosis_model.predict_proba(input_features)[0] 
             
             st.subheader("📊 1단계: 변별 진단 결과")
-            
-            # [수정됨] 강제 규칙 제거됨 -> 머신러닝 모델이 직접 판단
             
             if diag_pred == "Normal":
                 st.success(f"🟢 **정상 음성 (Normal)** 범위에 속합니다.")
