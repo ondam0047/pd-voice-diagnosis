@@ -297,7 +297,7 @@ st.header("1. 문단 낭독 및 음성 분석")
 col_rec, col_up = st.columns(2)
 
 if 'user_syllables' not in st.session_state:
-    st.session_state.user_syllables = 142
+    st.session_state.user_syllables = 80 # 단축된 문단 기준
 
 if 'source_type' not in st.session_state:
     st.session_state.source_type = None
@@ -305,7 +305,7 @@ if 'source_type' not in st.session_state:
 # [좌측: 마이크 녹음]
 with col_rec:
     st.markdown("#### 🎙️ 마이크 녹음")
-    font_size = st.slider("🔍 글자 크기", 15, 50, 25, key="fs_read")
+    font_size = st.slider("🔍 글자 크기", 15, 50, 28, key="fs_read")
     
     def styled_text(text, size):
         return f"""<div style="font-size: {size}px; line-height: 1.8; border: 1px solid #ddd; padding: 15px; background-color: #f9f9f9; color: #333;">{text}</div>"""
@@ -315,27 +315,26 @@ with col_rec:
         st.caption("권장 음절 수: 69")
         st.markdown(styled_text("높은 산에 올라가 맑은 공기를 마시며 소리를 지르면 가슴이 활짝 열리는 듯하다.<br><br>바닷가에 나가 조개를 주으며 넓게 펼쳐있는 바다를 바라보면 내 마음 역시 넓어지는 것 같다.", font_size), unsafe_allow_html=True)
         
-    # [문단 2] 바닷가의 추억 (SMR용)
+    # [문단 2] 바닷가의 추억 (단축형)
     with st.expander("🔎 [2] 바닷가의 추억 (SMR/조음 정밀 진단용) - 클릭해서 열기", expanded=True):
-        st.caption("권장 음절 수: 142")
+        st.caption("권장 음절 수: 80 (단축됨)")
         seaside_text = """
-        <strong>바닷가</strong>에 <strong>파도가</strong> 시원하게 밀려옵니다.<br>
-        하늘에는 알록달록 <strong>무지개</strong>가 떴고, 귀여운 <strong>바둑이</strong>가 뛰어옵니다.<br>
-        저 멀리 하얀 <strong>보트가</strong> 지나가는 것을 보며 <strong>버터구이</strong> 오징어를 먹었습니다.<br>
-        친구가 기념으로 <strong>포토카드</strong>를 찍어달라고 <strong>부탁해</strong>서, <br>
-        <strong>돋보기</strong>를 쓴 것처럼 자세히 화면을 보고 셔터를 눌렀습니다.<br>
-        출출한 배를 달래려 시장에서 <strong>빈대떡</strong>도 사 먹었습니다.
+        <strong>바닷가</strong>에 <strong>파도가</strong> 칩니다.<br>
+        <strong>무지개</strong> 아래 <strong>바둑이</strong>가 뜁니다.<br>
+        <strong>보트가</strong> 지나가고 <strong>버터구이</strong>를 먹습니다.<br>
+        <strong>포토카드</strong>를 <strong>부탁해</strong>서 <strong>돋보기</strong>로 봅니다.<br>
+        시장에서 <strong>빈대떡</strong>을 사 먹었습니다.
         """
         st.markdown(styled_text(seaside_text, font_size), unsafe_allow_html=True)
 
-    syllables_rec = st.number_input("전체 음절 수 (기본값: 142)", 1, 500, 142, key="syl_rec")
+    syllables_rec = st.number_input("전체 음절 수 (기본값: 80)", 1, 500, 80, key="syl_rec")
     st.session_state.user_syllables = syllables_rec
     
     audio_buf = st.audio_input("낭독 녹음", label_visibility="visible")
     if audio_buf:
         with open(TEMP_FILENAME, "wb") as f: f.write(audio_buf.read())
         st.session_state.current_wav_path = os.path.join(os.getcwd(), TEMP_FILENAME)
-        st.session_state.source_type = "mic" # 소스 타입 기록
+        st.session_state.source_type = "mic"
         st.success("녹음 완료 (SMR 분석 활성화됨)")
 
 # [우측: 파일 업로드]
@@ -345,7 +344,7 @@ with col_up:
     if up_file:
         with open(TEMP_FILENAME, "wb") as f: f.write(up_file.read())
         st.session_state.current_wav_path = os.path.join(os.getcwd(), TEMP_FILENAME)
-        st.session_state.source_type = "upload" # 소스 타입 기록
+        st.session_state.source_type = "upload"
         st.success("파일 준비됨 (SMR 분석 비활성화)")
 
 # 분석 버튼
@@ -390,7 +389,6 @@ if 'is_analyzed' in st.session_state and st.session_state['is_analyzed']:
     st.markdown("---")
     st.subheader("2. 분석 결과 및 보정")
     
-    # 1) 기본 음향 결과 테이블
     c_res1, c_res2 = st.columns([2, 1])
     with c_res1:
         st.plotly_chart(st.session_state['fig_plotly'], use_container_width=True)
@@ -473,21 +471,17 @@ if 'is_analyzed' in st.session_state and st.session_state['is_analyzed']:
         st.markdown("#### 📝 VHI-10 자가보고 (Patient)")
         vhi_labels = {0: "0: 전혀", 1: "1: 거의X", 2: "2: 가끔", 3: "3: 자주", 4: "4: 항상"}
         
-        q1 = st.select_slider("1. 목소리 때문에 상대방이 내 말을 알아듣기 힘들어한다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
-        q2 = st.select_slider("2. 시끄러운 곳에서는 사람들이 내 말을 이해하기 어려워한다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
-        q3 = st.select_slider("3. 사람들이 나에게 목소리가 왜 그러냐고 묻는다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
-        q4 = st.select_slider("4. 목소리를 내려면 힘을 주어야 나오는 것 같다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
-        q5 = st.select_slider("5. 음성문제로 개인 생활과 사회생활에 제한을 받는다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
-        q6 = st.select_slider("6. 목소리가 언제쯤 맑게 잘 나올지 알 수가 없다(예측이 어렵다)", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
-        q7 = st.select_slider("7. 내 목소리 때문에 대화에 끼지 못하여 소외감을 느낀다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
-        q8 = st.select_slider("8. 음성 문제로 인해 소득(수입)에 감소가 생긴다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
-        q9 = st.select_slider("9. 내 목소리 문제로 속이 상한다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
-        q10 = st.select_slider("10. 음성 문제가 장애로(핸디캡으로) 여겨진다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
+        q1 = st.select_slider("1. (기능) 목소리 때문에 상대방이 내 말을 알아듣기 힘들어한다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
+        q2 = st.select_slider("2. (기능) 시끄러운 곳에서는 사람들이 내 말을 이해하기 어려워한다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
+        q3 = st.select_slider("3. (신체) 사람들이 나에게 목소리가 왜 그러냐고 묻는다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
+        q4 = st.select_slider("4. (신체) 목소리를 내려면 힘을 주어야 나오는 것 같다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
+        q5 = st.select_slider("5. (기능) 음성문제로 개인 생활과 사회생활에 제한을 받는다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
+        q6 = st.select_slider("6. (신체) 목소리가 언제쯤 맑게 잘 나올지 알 수가 없다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
+        q7 = st.select_slider("7. (기능) 내 목소리 때문에 대화에 끼지 못하여 소외감을 느낀다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
+        q8 = st.select_slider("8. (기능) 음성 문제로 인해 소득(수입)에 감소가 생긴다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
+        q9 = st.select_slider("9. (정서) 내 목소리 문제로 속이 상한다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
+        q10 = st.select_slider("10. (정서) 음성 문제가 장애로(핸디캡으로) 여겨진다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
 
-        # VHI 계산 (요청하신 분류 적용)
-        # 기능(F): 1, 2, 5, 7, 8
-        # 신체(P): 3, 4, 6
-        # 정서(E): 9, 10
         vhi_f = q1 + q2 + q5 + q7 + q8
         vhi_p = q3 + q4 + q6
         vhi_e = q9 + q10
@@ -503,14 +497,12 @@ if 'is_analyzed' in st.session_state and st.session_state['is_analyzed']:
     
     if st.button("🚀 진단 결과 확인", key="btn_diag"):
         if diagnosis_model:
-            # 입력 벡터 생성
             input_vec = pd.DataFrame([[
                 st.session_state['f0_mean'], range_adj, final_db, final_sps,
                 vhi_p, vhi_f, vhi_e, p_pitch, p_prange, p_loud, p_rate, p_artic
             ]], columns=['F0', 'Range', 'Intensity', 'SPS', 'VHI_P', 'VHI_F', 'VHI_E', 
                          'P_Pitch', 'P_Range', 'P_Loudness', 'P_Rate', 'P_Artic'])
             
-            # 예측
             diag = diagnosis_model.predict(input_vec)[0]
             probs = diagnosis_model.predict_proba(input_vec)[0]
             
@@ -519,12 +511,10 @@ if 'is_analyzed' in st.session_state and st.session_state['is_analyzed']:
             else:
                 st.error(f"🔴 **파킨슨병(PD) 음성** 특성이 감지되었습니다. (확률: {probs[1]*100:.1f}%)")
                 
-                # 하위 유형 분류
                 sub_pred = subgroup_model.predict(input_vec)[0]
                 sub_probs = subgroup_model.predict_proba(input_vec)[0]
                 classes = subgroup_model.classes_
                 
-                # 레이더 차트
                 fig_radar = plt.figure(figsize=(5, 5))
                 ax = fig_radar.add_subplot(111, polar=True)
                 
@@ -534,7 +524,6 @@ if 'is_analyzed' in st.session_state and st.session_state['is_analyzed']:
                 ax.plot(angles, stats, linewidth=2, linestyle='solid', color='red')
                 ax.fill(angles, stats, 'red', alpha=0.25)
                 
-                # 라벨 (퍼센트 포함)
                 labels_with_pct = [f"{cls}\n({prob*100:.1f}%)" for cls, prob in zip(classes, sub_probs)]
                 ax.set_xticks(angles[:-1])
                 ax.set_xticklabels(labels_with_pct, size=11, fontweight='bold')
