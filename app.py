@@ -35,38 +35,36 @@ def setup_korean_font():
 setup_korean_font()
 
 # ==========================================
-# 0. 머신러닝 모델 학습 (만능 파일 로더 적용)
+# 0. 머신러닝 모델 학습 (VHI-30 -> VHI-10 자동 변환)
 # ==========================================
 @st.cache_resource
 def train_models():
     DATA_FILE = "training_data.csv"
     df = None
     
+    # 1. 데이터 파일 로드 (인코딩 자동 감지)
     if os.path.exists(DATA_FILE):
-        # [만능 로더] 다양한 인코딩과 형식을 순차적으로 시도
         loaders = [
-            (lambda f: pd.read_csv(f, encoding='utf-8'), "CSV (UTF-8)"),
-            (lambda f: pd.read_csv(f, encoding='cp949'), "CSV (CP949)"),
-            (lambda f: pd.read_csv(f, encoding='euc-kr'), "CSV (EUC-KR)"),
-            (lambda f: pd.read_csv(f, encoding='utf-16'), "CSV (UTF-16)"),
-            (lambda f: pd.read_excel(f), "Excel") # 확장자가 csv여도 내용이 엑셀이면 읽음
+            (lambda f: pd.read_csv(f, encoding='utf-8'), "utf-8"),
+            (lambda f: pd.read_csv(f, encoding='cp949'), "cp949"),
+            (lambda f: pd.read_csv(f, encoding='euc-kr'), "euc-kr")
         ]
-
+        
         df_raw = None
-        for loader, name in loaders:
+        for loader, enc_name in loaders:
             try:
                 df_raw = loader(DATA_FILE)
-                # print(f"Success loading with {name}") # 디버깅용
                 break
-            except Exception:
+            except:
                 continue
-        
+                
         if df_raw is not None:
             try:
                 data_list = []
                 for _, row in df_raw.iterrows():
                     label = str(row['진단결과 (Label)']).strip()
                     
+                    # 라벨링
                     if label.lower() == 'normal':
                         diagnosis = "Normal"
                         subgroup = "None"
@@ -82,71 +80,57 @@ def train_models():
                     else:
                         continue
 
-                    # VHI 스케일링 (총점 > 40이면 VHI-30으로 간주하고 /3)
-                    vhi_total = row['VHI총점']
-                    vhi_p = row['VHI_신체']
-                    vhi_f = row['VHI_기능']
-                    vhi_e = row['VHI_정서']
+                    # [중요] VHI 스케일링 (Training Data는 VHI-30이므로 3으로 나눔)
+                    # 사용자 입력(App)은 VHI-10이므로 단위를 맞춰줍니다.
+                    vhi_p = row['VHI_신체'] / 3.0
+                    vhi_f = row['VHI_기능'] / 3.0
+                    vhi_e = row['VHI_정서'] / 3.0
                     
-                    if vhi_total > 40: 
-                        vhi_p = vhi_p / 3
-                        vhi_f = vhi_f / 3
-                        vhi_e = vhi_e / 3
-                    
-                    # 결측치 처리 (0으로 대체)
+                    # 결측치 처리
                     p_loud = row['강도(청지각)'] if pd.notnull(row['강도(청지각)']) else 0
                     p_rate = row['말속도(청지각)'] if pd.notnull(row['말속도(청지각)']) else 0
                     p_artic = row['조음정확도(청지각)'] if pd.notnull(row['조음정확도(청지각)']) else 0
 
                     data_list.append([
-                        row['F0'],
-                        row['Range'],
-                        row['강도(dB)'],
-                        row['SPS'],
-                        vhi_p, 
-                        vhi_f, 
-                        vhi_e,
-                        p_loud,
-                        p_rate,
-                        p_artic,
-                        diagnosis,
-                        subgroup
+                        row['F0'], row['Range'], row['강도(dB)'], row['SPS'],
+                        vhi_p, vhi_f, vhi_e,
+                        p_loud, p_rate, p_artic,
+                        diagnosis, subgroup
                     ])
                 
                 df = pd.DataFrame(data_list, columns=[
                     'F0', 'Range', 'Intensity', 'SPS', 'VHI_P', 'VHI_F', 'VHI_E', 
                     'P_Loudness', 'P_Rate', 'P_Artic', 'Diagnosis', 'Subgroup'
                 ])
+                
             except Exception as e:
-                st.error(f"데이터 처리 중 오류: {e}")
+                st.error(f"데이터 전처리 오류: {e}")
                 df = None
         else:
-            st.error("❌ 데이터 파일을 읽을 수 없습니다. (인코딩 또는 형식 문제)")
-            df = None
+            st.error("❌ 데이터 파일을 읽을 수 없습니다. (인코딩 문제)")
 
-    # 파일이 없거나 로드 실패 시 가상 데이터 생성 (비상용)
+    # 2. 파일 없을 시 가상 데이터 사용 (비상용)
     if df is None:
-        N_SAMPLES = 100
+        N_SAMPLES = 50
         normal_data = []
         for _ in range(N_SAMPLES):
             normal_data.append([
                 np.random.normal(151.32, 25.0), np.random.normal(91.68, 20.0), np.random.normal(70.0, 5.0), np.random.normal(4.25, 0.8),
                 0, 0, 0, np.random.normal(85.0, 10.0), np.random.normal(50.0, 10.0), np.random.normal(95.0, 5.0), "Normal", "None"
             ])
-        # 파킨슨 가상 데이터 (강도 집단 예시)
         pd_data = []
         for _ in range(N_SAMPLES):
              pd_data.append([
                 np.random.normal(153.21, 25.0), np.random.normal(101.21, 25.0), np.random.normal(50.0, 5.0), np.random.normal(4.05, 0.8),
-                20/3, 19/3, 18/3, np.random.normal(30.0, 10.0), np.random.normal(50.0, 10.0), np.random.normal(60.0, 10.0), "Parkinson", "강도 집단"
+                7, 6, 6, 30, 50, 60, "Parkinson", "강도 집단"
             ])
-        
         df = pd.DataFrame(normal_data + pd_data, columns=[
             'F0', 'Range', 'Intensity', 'SPS', 'VHI_P', 'VHI_F', 'VHI_E', 
             'P_Loudness', 'P_Rate', 'P_Artic', 'Diagnosis', 'Subgroup'
         ])
-        st.warning("⚠️ 학습 데이터 파일(training_data.csv) 로드 실패. 임시 가상 데이터로 작동합니다.")
+        st.warning("⚠️ 학습 데이터 파일 로드 실패. 임시 모델로 작동합니다.")
 
+    # 3. 모델 학습
     features = ['F0', 'Range', 'Intensity', 'SPS', 'VHI_P', 'VHI_F', 'VHI_E', 'P_Loudness', 'P_Rate', 'P_Artic']
 
     model_diagnosis = RandomForestClassifier(n_estimators=200, random_state=42)
@@ -158,6 +142,7 @@ def train_models():
 
     return model_diagnosis, model_subgroup
 
+# 모델 로드
 try:
     diagnosis_model, subgroup_model = train_models()
 except:
@@ -237,7 +222,7 @@ def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
 st.title("🧠 파킨슨병(PD) 음성 하위유형 변별 진단 시스템")
 st.markdown("""
 이 프로그램은 **청지각적 평가**, **음향학적 분석**, **자가보고(VHI-10)** 데이터를 통합하여 
-파킨슨병 환자의 음성 특성을 3가지 하위 유형으로 분류합니다.
+파킨슨병 환자의 음성 특성을 4가지 하위 유형으로 분류합니다.
 **현재 모델은 업로드된 실제 임상 데이터를 기반으로 학습되었습니다.**
 """)
 
@@ -462,7 +447,7 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
         st.error("⚠️ 음성 분석 (2단계)을 먼저 실행해 주세요.")
     else:
         if diagnosis_model is None:
-            st.error("🚨 학습 데이터 파일(training_data.csv)이 GitHub에 없어서 모델을 만들지 못했습니다. 파일을 업로드해주세요!")
+            st.error("🚨 학습 데이터 파일(training_data.csv)이 GitHub에 없어서 모델을 만들지 못했습니다.")
         else:
             feature_names = ['F0', 'Range', 'Intensity', 'SPS', 'VHI_P', 'VHI_F', 'VHI_E', 'P_Loudness', 'P_Rate', 'P_Artic']
             
@@ -486,15 +471,12 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
             
             st.subheader("📊 1단계: 변별 진단 결과")
             
-            # [수정] 정상 판정 조건 강화: 조음 70 이상 또는 VHI 총점 15 이하
-            if p_articulation >= 70 or vhi_total <= 15: 
-                diag_pred = "Normal"
-                diag_prob = [0.99, 0.01] 
-
+            # [수정됨] 강제 규칙 제거됨 -> 머신러닝 모델이 직접 판단
+            
             if diag_pred == "Normal":
                 st.success(f"🟢 **정상 음성 (Normal)** 범위에 속합니다.")
                 st.metric("정상 확률", f"{diag_prob[0]*100:.1f}%")
-                st.info("학습된 임상 데이터 기준, 파킨슨병 특이적 음성 징후가 관찰되지 않았습니다.")
+                st.info("파킨슨병 특이적 음성 징후가 관찰되지 않았습니다.")
                 
             else:
                 st.error(f"🔴 **파킨슨병(PD) 음성 장애** 특성이 감지되었습니다.")
@@ -538,4 +520,3 @@ if st.button("🚀 최종 변별 진단 실행", key="final_classify_button"):
                     desc = "청지각적 조음 정확도가 현저히 낮고 발음이 불명료한 것이 주된 특징입니다."
                     
                 st.info(f"💡 **임상적 제언:** {desc}")
-
