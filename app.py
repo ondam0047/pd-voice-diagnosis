@@ -15,7 +15,14 @@ from scipy.signal import find_peaks
 st.set_page_config(page_title="PD 음성 변별 진단 시스템", layout="wide")
 
 # ==========================================
-# [한글 폰트 설정] (기존 유지)
+# [중요] 변수 전역 설정 (NameError 방지)
+# ==========================================
+# 모델 학습과 예측에 공통으로 사용될 특성(Column) 이름을 미리 정의합니다.
+FEATS_STEP1 = ['F0', 'Range', 'Intensity', 'SPS', 'VHI_Total', 'VHI_P', 'VHI_F', 'VHI_E']
+FEATS_STEP2 = FEATS_STEP1 + ['P_Pitch', 'P_Range', 'P_Loudness', 'P_Rate', 'P_Artic']
+
+# ==========================================
+# [한글 폰트 설정]
 # ==========================================
 def setup_korean_font():
     system_name = platform.system()
@@ -35,16 +42,15 @@ def setup_korean_font():
 setup_korean_font()
 
 # ==========================================
-# 0. 머신러닝 모델 학습 (VHI 가중치 로직 적용됨)
+# 0. 머신러닝 모델 학습
 # ==========================================
 @st.cache_resource
 def train_models():
     DATA_FILE = "training_data.csv"
     df = None
     
-    # 1. 데이터 로드 (기존 로직 유지)
+    # 1. 데이터 로드
     if os.path.exists(DATA_FILE) or os.path.exists("training_data.xlsx"):
-        # 엑셀 파일 우선 지원 추가
         loaders = [
             (lambda f: pd.read_excel(f.replace(".csv", ".xlsx")), "excel"),
             (lambda f: pd.read_csv(f, encoding='utf-8'), "utf-8"),
@@ -52,7 +58,6 @@ def train_models():
             (lambda f: pd.read_csv(f, encoding='euc-kr'), "euc-kr")
         ]
         
-        # 파일명 결정
         target_file = "training_data.xlsx" if os.path.exists("training_data.xlsx") else DATA_FILE
         
         df_raw = None
@@ -83,15 +88,13 @@ def train_models():
                     else:
                         continue
 
-                    # [수정됨] VHI 점수 체계 보정 (VHI-30 -> VHI-10 가중치 적용)
-                    # VHI-30은 영역별 40점 만점 / VHI-10은 기능20, 신체12, 정서8 만점
+                    # VHI 점수 체계 보정
                     raw_total = row.get('VHI총점', 0)
                     raw_p = row.get('VHI_신체', 0)
                     raw_f = row.get('VHI_기능', 0)
                     raw_e = row.get('VHI_정서', 0)
                     
                     if raw_total > 40: 
-                        # 비율에 맞춰 스케일링 (Scaling)
                         vhi_f = (raw_f / 40.0) * 20.0
                         vhi_p = (raw_p / 40.0) * 12.0
                         vhi_e = (raw_e / 40.0) * 8.0
@@ -102,7 +105,6 @@ def train_models():
                         vhi_p = raw_p
                         vhi_e = raw_e
                     
-                    # 청지각 변수 처리
                     p_pitch = row.get('음도(청지각)', 0)
                     p_prange = row.get('음도범위(청지각)', 0)
                     p_loud = row.get('강도(청지각)', 0)
@@ -116,47 +118,34 @@ def train_models():
                         diagnosis, subgroup
                     ])
                 
-                df = pd.DataFrame(data_list, columns=[
-                    'F0', 'Range', 'Intensity', 'SPS', 
-                    'VHI_Total', 'VHI_P', 'VHI_F', 'VHI_E', 
-                    'P_Pitch', 'P_Range', 'P_Loudness', 'P_Rate', 'P_Artic', 
-                    'Diagnosis', 'Subgroup'
-                ])
+                df = pd.DataFrame(data_list, columns=FEATS_STEP2 + ['Diagnosis', 'Subgroup'])
                 
-                # 결측치 보완
-                acoustic_vars = ['F0', 'Range', 'Intensity', 'SPS']
-                for col in acoustic_vars:
+                for col in FEATS_STEP2[:4]: # Acoustic vars
                     df[col] = df[col].fillna(df[col].mean())
                 
-                # VHI 결측치 0 처리
-                vhi_vars = ['VHI_Total', 'VHI_P', 'VHI_F', 'VHI_E']
-                df[vhi_vars] = df[vhi_vars].fillna(0)
+                df[FEATS_STEP1[4:]] = df[FEATS_STEP1[4:]].fillna(0) # VHI vars
 
             except Exception as e:
                 st.error(f"데이터 전처리 오류: {e}")
                 df = None
 
     if df is None:
-        st.warning("⚠️ 학습 데이터가 없습니다. CSV/XLSX 파일을 확인해주세요.")
+        st.warning("⚠️ 학습 데이터가 없습니다.")
         return None, None
 
     # --- 모델 학습 ---
-    feats_step1 = ['F0', 'Range', 'Intensity', 'SPS', 'VHI_Total', 'VHI_P', 'VHI_F', 'VHI_E']
-    feats_step2 = feats_step1 + ['P_Pitch', 'P_Range', 'P_Loudness', 'P_Rate', 'P_Artic']
-
     # 1. Normal vs Parkinson
     model_step1 = RandomForestClassifier(n_estimators=200, random_state=42)
-    model_step1.fit(df[feats_step1], df['Diagnosis'])
+    model_step1.fit(df[FEATS_STEP1], df['Diagnosis'])
 
     # 2. PD Subtype
     df_pd = df[df['Diagnosis'] == 'Parkinson'].copy()
     if not df_pd.empty:
-        # 학습용 청지각 변수 결측치 처리
-        for col in ['P_Pitch', 'P_Range', 'P_Loudness', 'P_Rate', 'P_Artic']:
+        for col in FEATS_STEP2[8:]: # Perceptual vars
              df_pd[col] = df_pd[col].fillna(df_pd[col].mean())
              
         model_step2 = RandomForestClassifier(n_estimators=200, random_state=42)
-        model_step2.fit(df_pd[feats_step2], df_pd['Subgroup'])
+        model_step2.fit(df_pd[FEATS_STEP2], df_pd['Subgroup'])
     else:
         model_step2 = None
 
@@ -177,7 +166,7 @@ with st.sidebar:
 TEMP_FILENAME = "temp_for_analysis.wav"
 
 # ==========================================
-# [함수] 자동 조음 분석 (기존 유지)
+# [함수] 자동 조음 분석
 # ==========================================
 def auto_detect_smr_events(sound_path, top_n=10):
     try:
@@ -195,15 +184,14 @@ def auto_detect_smr_events(sound_path, top_n=10):
             end_search = min(len(values), p_idx + 20)
             local_max = np.max(values[start_search:end_search])
             depth = local_max - v_int
-            burst = 0 # Burst 로직 생략 가능
-            candidates.append({"time": time_point, "depth": depth, "burst": burst})
+            candidates.append({"time": time_point, "depth": depth})
         candidates.sort(key=lambda x: x['time'])
         return candidates[:top_n], len(candidates)
     except:
         return [], 0
 
 # ==========================================
-# [함수] 피치 컨투어 시각화 (기존 유지)
+# [함수] 피치 컨투어 시각화
 # ==========================================
 def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
     try:
@@ -340,7 +328,7 @@ if st.session_state.get('is_analyzed'):
         st.dataframe(pd.DataFrame(smr_df_data).T)
 
     # ==========================================
-    # 3. 청지각/자가보고 (VHI-10) - 가중치 로직 적용
+    # 3. 청지각/자가보고 (VHI-10)
     # ==========================================
     st.markdown("---")
     st.subheader("3. 청지각 평가 및 자가보고 (VHI-10)")
@@ -361,7 +349,6 @@ if st.session_state.get('is_analyzed'):
         
         vhi_opts = [0, 1, 2, 3, 4]
         
-        # [수정됨] 문항별 입력 및 영역 자동 분류
         with st.expander("VHI-10 문항 입력 (클릭)", expanded=True):
             st.markdown("**기능(F) - 5문항 (20점 만점)**")
             q1 = st.select_slider("1. 상대방이 내 말을 알아듣기 힘들어한다", options=vhi_opts)
@@ -393,7 +380,7 @@ if st.session_state.get('is_analyzed'):
         c_v4.metric("정서(E)", f"{vhi_e}점", "/ 8")
 
     # ==========================================
-    # 4. 최종 진단 (Hybrid Logic: 임계값/가중치 적용)
+    # 4. 최종 진단 (Hybrid Logic)
     # ==========================================
     st.markdown("---")
     st.subheader("4. 최종 종합 진단")
@@ -402,22 +389,21 @@ if st.session_state.get('is_analyzed'):
         if model_step1 is None:
             st.error("모델 로드 실패. 데이터를 확인하세요.")
         else:
-            # Step 0: Rule-based (정상 여부 1차 체크)
+            # Step 0: Rule-based
             if p_artic >= 78 and vhi_total < 12:
                 st.success(f"🟢 **정상 음성 (Normal)** 입니다.")
                 st.info(f"이유: 청지각적 조음 정확도가 높고(78↑), VHI 불편함이 낮습니다.")
             
             else:
-                # Step 1: 1차 AI 진단 (Normal vs PD)
+                # Step 1: 1차 AI 진단
                 input_step1 = pd.DataFrame([[
                     st.session_state['f0_mean'], range_adj, final_db, final_sps,
                     vhi_total, vhi_p, vhi_f, vhi_e
-                ]], columns=['F0', 'Range', 'Intensity', 'SPS', 'VHI_Total', 'VHI_P', 'VHI_F', 'VHI_E'])
+                ]], columns=FEATS_STEP1)
                 
                 pred_1 = model_step1.predict(input_step1)[0]
                 prob_1 = model_step1.predict_proba(input_step1)[0]
                 
-                # Normal 확률 찾기
                 classes_1 = list(model_step1.classes_)
                 normal_idx = classes_1.index('Normal') if 'Normal' in classes_1 else 0
                 prob_normal = prob_1[normal_idx] * 100
@@ -427,7 +413,7 @@ if st.session_state.get('is_analyzed'):
                     st.info(f"AI 판단: 음향/VHI 패턴이 정상 범주입니다. (정상 확률: {prob_normal:.1f}%)")
                 
                 else:
-                    # Step 2: 2차 AI 진단 + [핵심] Hybrid 임계값 적용
+                    # Step 2: 2차 AI 진단
                     st.error(f"🔴 **파킨슨병(PD) 음성 특성**이 감지되었습니다.")
                     st.write("1차 AI 진단 결과 파킨슨 패턴과 유사합니다. 세부 유형을 분석합니다.")
                     
@@ -436,42 +422,39 @@ if st.session_state.get('is_analyzed'):
                             st.session_state['f0_mean'], range_adj, final_db, final_sps,
                             vhi_total, vhi_p, vhi_f, vhi_e,
                             p_pitch, p_prange, p_loud, p_rate, p_artic
-                        ]], columns=feats_step2)
+                        ]], columns=FEATS_STEP2)
                         
                         pred_subtype = model_step2.predict(input_step2)[0]
                         probs_sub = model_step2.predict_proba(input_step2)[0]
                         
-                        # --- [Hybrid Logic] 학습된 임계값 및 가중치 적용 구간 ---
+                        # --- [Hybrid Logic] 임계값 및 가중치 적용 ---
                         final_decision = pred_subtype
                         warn_msg = []
                         
-                        # 1. 말속도 집단 판별 로직 (정서 점수 가중치)
-                        emotional_ratio = vhi_e / 8.0 # 정서 점수 비율
+                        # 1. 말속도 집단 판별 (정서 점수 가중치)
+                        emotional_ratio = vhi_e / 8.0 
                         if emotional_ratio >= 0.55: # 정서 5점 이상
                             if "말속도" not in final_decision:
-                                warn_msg.append("⚠️ **[중요]** 높은 정서적 스트레스(VHI-정서)가 감지되었습니다. 이는 **'말속도 집단'**의 핵심 특징입니다.")
-                                # AI 예측이 말속도가 아니더라도 확률이 근소하면 변경 고려 가능
+                                warn_msg.append("⚠️ **[중요]** 높은 정서적 스트레스(VHI-정서)가 감지되었습니다. 이는 **'말속도 집단'**의 특징입니다.")
                         
                         if final_sps >= 4.5 and "말속도" not in final_decision:
-                             warn_msg.append("⚠️ 객관적 말속도(SPS)가 빠릅니다. 말속도 제어가 필요할 수 있습니다.")
+                             warn_msg.append("⚠️ 객관적 말속도(SPS)가 빠릅니다.")
 
-                        # 2. 강도 집단 판별 로직 (임계값 60dB)
+                        # 2. 강도 집단 판별 (임계값 60dB)
                         MIC_INTENSITY_CUTOFF = 60.0
                         if final_db < MIC_INTENSITY_CUTOFF:
                             if "강도" not in final_decision:
-                                warn_msg.append(f"⚠️ **[중요]** 음성 강도가 {final_db:.1f}dB로 기준({MIC_INTENSITY_CUTOFF}dB)보다 낮습니다. **'강도 집단'** 특성이 강합니다.")
+                                warn_msg.append(f"⚠️ **[중요]** 음성 강도가 {final_db:.1f}dB로 기준보다 낮습니다. **'강도 집단'** 특성이 강합니다.")
                                 final_decision = "강도 집단 (재조정됨)"
 
-                        # 3. 조음 집단 판별 로직 (VHI 낮음 + 조음 문제)
+                        # 3. 조음 집단 판별
                         if vhi_total < 15 and p_artic < 60:
                             if "조음" not in final_decision:
-                                warn_msg.append("⚠️ 환자의 주관적 불편함(VHI)은 적으나 청지각적 조음 문제가 있습니다. **'조음 집단'** 가능성이 높습니다.")
+                                warn_msg.append("⚠️ 주관적 불편함(VHI)은 적으나 청지각적 조음 문제가 있습니다. **'조음 집단'** 가능성이 높습니다.")
                                 final_decision = "조음 집단 (재조정됨)"
 
                         st.markdown(f"### 🔍 최종 예측 하위 유형: **[{final_decision}]**")
-                        
-                        for msg in warn_msg:
-                            st.warning(msg)
+                        for msg in warn_msg: st.warning(msg)
                         
                         # Radar Chart
                         labels = list(model_step2.classes_)
@@ -494,4 +477,4 @@ if st.session_state.get('is_analyzed'):
                             elif "말속도" in final_decision:
                                 st.info("💡 **특징:** 말이 빠르거나 리듬이 불규칙하며, 정서적 불안감이 동반될 수 있습니다.")
                             else:
-                                st.info("💡 **특징:** 발음이 뭉개지고 정확도가 떨어집니다. 본인은 인지하지 못할 수 있습니다.")
+                                st.info("💡 **특징:** 발음이 뭉개지고 정확도가 떨어집니다.")
