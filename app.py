@@ -426,7 +426,7 @@ if st.session_state.get('is_analyzed'):
             if p_artic >= 78:
                 # [수정] 풍선 효과 제거됨
                 st.success(f"🟢 **정상 음성 (Normal)** 입니다.")
-                st.info(f"이유: 조음정확도({p_artic}점)가 정상 기준을 충족합니다.")
+                st.info(f"이유: 정상 기준을 충족합니다.")
             
             else:
                 # ---------------------------------------------------------
@@ -494,5 +494,6 @@ if st.session_state.get('is_analyzed'):
                             st.warning("💡 **특징:** 말이 빠르거나 리듬이 불규칙합니다. (Festination)")
                         else:
                             st.warning("💡 **특징:** 발음이 뭉개지고 정확도가 떨어집니다. (Dysarthria)")
+
 
 
