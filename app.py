@@ -127,7 +127,6 @@ def train_models():
                 st.error(f"데이터 전처리 오류: {e}")
                 df = None
 
-    # 데이터 로드 실패 시 임시 데이터 생성 (실행 방지용)
     if df is None:
         st.warning("⚠️ 학습 데이터가 없습니다. CSV 파일을 확인해주세요.")
         return None, None
@@ -146,7 +145,6 @@ def train_models():
     model_step1.fit(df[feats_step1], df['Diagnosis'])
 
     # 2. [Step 2 Model] PD Subtype Classification
-    # PD 데이터만 추출하여 학습
     df_pd = df[df['Diagnosis'] == 'Parkinson'].copy()
     
     # PD 데이터 내 청지각 결측치는 평균으로 대치
@@ -246,14 +244,14 @@ st.title("🧠 파킨슨병(PD) 음성 하위유형 변별 진단 시스템")
 st.markdown("청지각(Perceptual) + 음향(Acoustic) + 자가보고(VHI) 통합 하이브리드 진단 모델")
 
 # ==========================================
-# 1. 문단 낭독 및 음성 분석 (UI 복구됨)
+# 1. 문단 낭독 및 음성 분석
 # ==========================================
 st.header("1. 문단 낭독 및 음성 분석")
 
 col_rec, col_up = st.columns(2)
 
 if 'user_syllables' not in st.session_state:
-    st.session_state.user_syllables = 80 # 기본값
+    st.session_state.user_syllables = 80
 
 if 'source_type' not in st.session_state:
     st.session_state.source_type = None
@@ -308,11 +306,9 @@ if st.button("🛠️ 음성 분석 실행", key="btn_anal_main"):
     if 'current_wav_path' in st.session_state:
         try:
             fig, f0, rng, dur = plot_pitch_contour_plotly(st.session_state.current_wav_path, 75, 300)
-            
             sound = parselmouth.Sound(st.session_state.current_wav_path)
             intensity = sound.to_intensity()
             mean_db = call(intensity, "Get mean", 0, 0, "energy")
-            
             sps = st.session_state.user_syllables / dur if dur > 0 else 0
             
             smr_events = []
@@ -346,10 +342,7 @@ if st.session_state.get('is_analyzed'):
     with c2:
         db_adj = st.slider("강도(dB) 보정", -50.0, 50.0, -10.0)
         final_db = st.session_state['mean_db'] + db_adj
-        
         range_adj = st.slider("음도범위(Hz) 보정", 0.0, 300.0, float(st.session_state['pitch_range']))
-        
-        # 발화 구간 조절 (SPS 계산용)
         s_time, e_time = st.slider("말속도 측정 구간(초)", 0.0, st.session_state['duration'], (0.0, st.session_state['duration']), 0.01)
         sel_dur = max(0.1, e_time - s_time)
         final_sps = st.session_state.user_syllables / sel_dur
@@ -372,16 +365,18 @@ if st.session_state.get('is_analyzed'):
         st.dataframe(pd.DataFrame(smr_df_data).T)
 
     # ==========================================
-    # 3. 청지각/자가보고 (VHI)
+    # 3. 청지각/자가보고 (VHI) - 요청사항 반영 수정됨
     # ==========================================
     st.markdown("---")
     st.subheader("3. 청지각 평가 및 자가보고 (VHI)")
     
-    cc1, cc2 = st.columns(2)
+    cc1, cc2 = st.columns([1, 1.2]) # VHI 문항이 길어서 비율 조정
+    
     with cc1:
         st.markdown("#### 🔊 청지각 평가")
-        st.caption("※ 정상 판별의 핵심 기준입니다.")
-        p_artic = st.slider("조음 정확도 (Articulation) ★중요", 0, 100, 50, help="78점 이상이면 정상으로 간주됩니다.")
+        st.caption("※ 78점 이상이면 정상으로 간주합니다.")
+        # [수정] 중요 표시 별표 제거
+        p_artic = st.slider("조음 정확도 (Articulation)", 0, 100, 50, help="78점 이상이면 정상으로 간주됩니다.")
         p_pitch = st.slider("음도 (Pitch)", 0, 100, 50)
         p_prange = st.slider("음도 범위 (Pitch Range)", 0, 100, 50)
         p_loud = st.slider("강도 (Loudness)", 0, 100, 50)
@@ -389,15 +384,35 @@ if st.session_state.get('is_analyzed'):
         
     with cc2:
         st.markdown("#### 📝 VHI-10 (자가보고)")
-        vhi_total = st.slider("VHI 총점 (0~40)", 0, 40, 0, help="0점일수록 문제 없음")
-        vhi_p = st.slider("신체적 점수 (P)", 0, 40, 0)
-        vhi_f = st.slider("기능적 점수 (F)", 0, 40, 0)
-        vhi_e = st.slider("정서적 점수 (E)", 0, 40, 0)
-        if vhi_total == 0 and (vhi_p+vhi_f+vhi_e) > 0:
-            vhi_total = vhi_p + vhi_f + vhi_e
+        st.caption("0: 전혀, 1: 거의X, 2: 가끔, 3: 자주, 4: 항상")
+        
+        # [수정] 요청하신 10개 문항 적용
+        vhi_opts = [0, 1, 2, 3, 4]
+        
+        q1 = st.select_slider("1. 목소리 때문에 상대방이 내 말을 알아듣기 힘들어한다", options=vhi_opts) # 기능
+        q2 = st.select_slider("2. 시끄러운 곳에서는 사람들이 내 말을 이해하기 어려워한다", options=vhi_opts) # 기능
+        q3 = st.select_slider("3. 사람들이 나에게 목소리가 왜 그러냐고 묻는다", options=vhi_opts) # 신체
+        q4 = st.select_slider("4. 목소리를 내려면 힘을 주어야 나오는 것 같다", options=vhi_opts) # 신체
+        q5 = st.select_slider("5. 음성문제로 개인 생활과 사회생활에 제한을 받는다", options=vhi_opts) # 기능
+        q6 = st.select_slider("6. 목소리가 언제쯤 맑게 잘 나올지 알 수가 없다(예측이 어렵다)", options=vhi_opts) # 신체
+        q7 = st.select_slider("7. 내 목소리 때문에 대화에 끼지 못하여 소외감을 느낀다", options=vhi_opts) # 기능
+        q8 = st.select_slider("8. 음성 문제로 인해 소득(수입)에 감소가 생긴다", options=vhi_opts) # 기능
+        q9 = st.select_slider("9. 내 목소리 문제로 속이 상한다", options=vhi_opts) # 정서
+        q10 = st.select_slider("10. 음성 문제가 장애로(핸디캡으로) 여겨진다", options=vhi_opts) # 정서
+
+        # VHI 영역별 계산 (일반적인 VHI-10 분류 기준 적용)
+        # 기능(F): 1, 2, 5, 7, 8
+        # 신체(P): 3, 4, 6
+        # 정서(E): 9, 10
+        vhi_f = q1 + q2 + q5 + q7 + q8
+        vhi_p = q3 + q4 + q6
+        vhi_e = q9 + q10
+        vhi_total = vhi_f + vhi_p + vhi_e
+        
+        st.info(f"**VHI 총점: {vhi_total} / 40점**")
 
     # ==========================================
-    # 4. 최종 진단 (Hybrid Logic 적용)
+    # 4. 최종 진단 (Hybrid Logic)
     # ==========================================
     st.markdown("---")
     st.subheader("4. 최종 종합 진단")
@@ -410,14 +425,13 @@ if st.session_state.get('is_analyzed'):
             # [Step 0] Rule-based Filtering (안전장치)
             # ---------------------------------------------------------
             if p_artic >= 78:
-                st.balloons()
+                # [수정] 풍선 효과 제거됨
                 st.success(f"🟢 **정상 음성 (Normal)** 입니다.")
                 st.info(f"이유: 조음정확도({p_artic}점)가 정상 기준(78점 이상)을 충족합니다.")
             
             else:
                 # ---------------------------------------------------------
                 # [Step 1] 1차 AI 진단 (Normal vs PD)
-                # 핵심: 청지각 변수 제외, VHI와 음향변수만 사용하여 오진 방지
                 # ---------------------------------------------------------
                 input_step1 = pd.DataFrame([[
                     st.session_state['f0_mean'], range_adj, final_db, final_sps,
@@ -427,19 +441,18 @@ if st.session_state.get('is_analyzed'):
                 pred_1 = model_step1.predict(input_step1)[0]
                 prob_1 = model_step1.predict_proba(input_step1)[0]
                 
-                # Normal 확률 찾기
                 classes_1 = list(model_step1.classes_)
                 normal_idx = classes_1.index('Normal') if 'Normal' in classes_1 else 0
                 prob_normal = prob_1[normal_idx] * 100
 
                 if pred_1 == 'Normal':
+                    # [수정] 풍선 효과 제거됨
                     st.success(f"🟢 **정상 음성 (Normal)** 범위입니다.")
                     st.info(f"AI 판단: 음향적 특성과 VHI 점수가 정상 범주입니다. (정상 확률: {prob_normal:.1f}%)")
                 
                 else:
                     # ---------------------------------------------------------
                     # [Step 2] 2차 AI 진단 (PD Subtype)
-                    # 1차에서 PD로 의심된 경우에만 수행, 청지각 변수 포함하여 세부 분류
                     # ---------------------------------------------------------
                     st.error(f"🔴 **파킨슨병(PD) 음성 특성**이 감지되었습니다.")
                     st.write("1차 AI 진단 결과 파킨슨 패턴과 유사합니다. 세부 유형을 분석합니다.")
