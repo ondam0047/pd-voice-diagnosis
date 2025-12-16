@@ -161,7 +161,7 @@ with st.sidebar:
 TEMP_FILENAME = "temp_for_analysis.wav"
 
 # ==========================================
-# [함수] 공통 분석 로직 (버튼 분리를 위해 함수화)
+# [함수] 공통 분석 로직
 # ==========================================
 def auto_detect_smr_events(sound_path, top_n=10):
     try:
@@ -271,7 +271,6 @@ with col_rec:
     
     audio_buf = st.audio_input("낭독 녹음")
     
-    # [수정 1] 마이크 전용 분석 버튼
     if st.button("🎙️ 녹음된 음성 분석", key="btn_anal_mic"):
         if audio_buf:
             with open(TEMP_FILENAME, "wb") as f: f.write(audio_buf.read())
@@ -289,7 +288,6 @@ with col_up:
     if up_file:
         st.audio(up_file, format='audio/wav')
     
-    # [수정 1] 파일 전용 분석 버튼
     if st.button("📂 업로드 파일 분석", key="btn_anal_file"):
         if up_file:
             with open(TEMP_FILENAME, "wb") as f: f.write(up_file.read())
@@ -355,19 +353,19 @@ if st.session_state.get('is_analyzed'):
         vhi_opts = [0, 1, 2, 3, 4]
         
         with st.expander("VHI-10 문항 입력 (클릭)", expanded=True):
-            # 기능(F) 관련 문항
+            # 기능(F)
             q1 = st.select_slider("1. 상대방이 내 말을 알아듣기 힘들어한다", options=vhi_opts)
             q2 = st.select_slider("2. 시끄러운 곳에서 이해하기 어려워한다", options=vhi_opts)
             q5 = st.select_slider("5. 음성문제로 생활에 제한을 받는다", options=vhi_opts)
             q7 = st.select_slider("7. 대화에 끼지 못해 소외감을 느낀다", options=vhi_opts)
             q8 = st.select_slider("8. 음성 문제로 수입 감소가 생긴다", options=vhi_opts)
             
-            # 신체(P) 관련 문항
+            # 신체(P)
             q3 = st.select_slider("3. 사람들이 목소리가 왜 그러냐고 묻는다", options=vhi_opts)
             q4 = st.select_slider("4. 목소리를 내려면 힘을 주어야 한다", options=vhi_opts)
             q6 = st.select_slider("6. 목소리가 언제 맑게 나올지 알 수 없다", options=vhi_opts)
 
-            # 정서(E) 관련 문항
+            # 정서(E)
             q9 = st.select_slider("9. 내 목소리 문제로 속이 상한다", options=vhi_opts)
             q10 = st.select_slider("10. 음성 문제가 장애로 여겨진다", options=vhi_opts)
 
@@ -395,9 +393,7 @@ if st.session_state.get('is_analyzed'):
             st.error("모델 로드 실패. 데이터를 확인하세요.")
         else:
             # Step 0: Rule-based (규칙 기반)
-            # 정상 기준: 조음 정확도 78점 이상 AND VHI 총점 12점 미만
             if p_artic >= 78 and vhi_total < 12:
-                # [수정 2] 정상 음성 메시지 수정 (이유 삭제, 100% 표기)
                 st.success(f"🟢 **정상 음성 (Normal) (100.0%)**")
             
             else:
@@ -415,11 +411,10 @@ if st.session_state.get('is_analyzed'):
                 prob_normal = prob_1[normal_idx] * 100
 
                 if pred_1 == 'Normal':
-                    # [수정 2] AI가 정상으로 판별했을 경우 메시지 수정
                     st.success(f"🟢 **정상 음성 (Normal) ({prob_normal:.1f}%)**")
                 
                 else:
-                    # Step 2: 2차 AI 진단 (비정상일 경우)
+                    # Step 2: 2차 AI 진단
                     st.error(f"🔴 **파킨슨병(PD) 음성 특성**이 감지되었습니다.")
                     st.write("1차 AI 진단 결과 파킨슨 패턴과 유사합니다. 세부 유형을 분석합니다.")
                     
@@ -437,14 +432,26 @@ if st.session_state.get('is_analyzed'):
                         final_decision = pred_subtype
                         warn_msg = []
                         
-                        # 1. 말속도 집단 판별 (정서 점수 가중치)
+                        # [중요 수정] 말속도 집단 재조정 로직 강화
+                        # AI 확률이 낮더라도 객관적 지표(SPS)나 정서 지표(VHI-E)가 명확하면 재조정
+                        
+                        is_rate_feature = False
+                        
+                        # 정서 점수 가중치
                         emotional_ratio = vhi_e / 8.0 
                         if emotional_ratio >= 0.55: # 정서 5점 이상
-                            if "말속도" not in final_decision:
-                                warn_msg.append("⚠️ **[중요]** 높은 정서적 스트레스(VHI-정서)가 감지되었습니다. 이는 **'말속도 집단'**의 특징입니다.")
+                            is_rate_feature = True
+                            warn_msg.append("⚠️ **[중요]** 높은 정서적 스트레스(VHI-정서)가 감지되었습니다. 이는 **'말속도 집단'**의 특징입니다.")
                         
-                        if final_sps >= 4.5 and "말속도" not in final_decision:
+                        # 객관적 말속도 가중치
+                        if final_sps >= 4.5:
+                             is_rate_feature = True
                              warn_msg.append("⚠️ 객관적 말속도(SPS)가 빠릅니다.")
+                        
+                        # 재조정 실행 (이전 코드에서 누락되었던 부분)
+                        if is_rate_feature and "말속도" not in final_decision:
+                            final_decision = "말속도 집단 (재조정됨)"
+                            warn_msg.append("💡 객관적 지표에 따라 진단 결과가 **'말속도 집단'**으로 보정되었습니다.")
 
                         # 2. 강도 집단 판별 (임계값 60dB)
                         MIC_INTENSITY_CUTOFF = 60.0
