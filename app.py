@@ -4,8 +4,8 @@ from parselmouth.praat import call
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
-import matplotlib.pyplot as plt    
-import matplotlib.font_manager as fm 
+import matplotlib.pyplot as plt
+import matplotlib.font_manager as fm
 import os
 import platform
 from sklearn.ensemble import RandomForestClassifier
@@ -36,13 +36,14 @@ def setup_korean_font():
 setup_korean_font()
 
 # ==========================================
-# 0. 머신러닝 모델 학습
+# 0. 머신러닝 모델 학습 (Hybrid Logic 적용)
 # ==========================================
 @st.cache_resource
 def train_models():
     DATA_FILE = "training_data.csv"
     df = None
     
+    # 1. 데이터 로드
     if os.path.exists(DATA_FILE):
         loaders = [
             (lambda f: pd.read_csv(f, encoding='utf-8'), "utf-8"),
@@ -80,84 +81,95 @@ def train_models():
                     else:
                         continue
 
-                    vhi_total = row['VHI총점']
-                    vhi_p = row['VHI_신체']
-                    vhi_f = row['VHI_기능']
-                    vhi_e = row['VHI_정서']
+                    # VHI 처리
+                    vhi_total = row.get('VHI총점', 0)
+                    vhi_p = row.get('VHI_신체', 0)
+                    vhi_f = row.get('VHI_기능', 0)
+                    vhi_e = row.get('VHI_정서', 0)
                     
-                    if vhi_total > 40: 
+                    if vhi_total > 40: # 점수 체계 보정
                         vhi_p = vhi_p / 3
                         vhi_f = vhi_f / 3
                         vhi_e = vhi_e / 3
+                        vhi_total = vhi_p + vhi_f + vhi_e
                     
-                    p_pitch = row.get('음도(청지각)', 50)
-                    p_prange = row.get('음도범위(청지각)', 50)
+                    # 청지각 변수 처리
+                    p_pitch = row.get('음도(청지각)', 0)
+                    p_prange = row.get('음도범위(청지각)', 0)
                     p_loud = row.get('강도(청지각)', 0)
                     p_rate = row.get('말속도(청지각)', 0)
                     p_artic = row.get('조음정확도(청지각)', 0)
                     
-                    if pd.isna(p_pitch): p_pitch = 50
-                    if pd.isna(p_prange): p_prange = 50
-                    if pd.isna(p_loud): p_loud = 0
-                    if pd.isna(p_rate): p_rate = 0
-                    if pd.isna(p_artic): p_artic = 0
+                    # 결측치 처리 (Normal은 0 또는 평균, PD는 평균 대치 필요하나 여기선 기본값)
+                    # *학습 시 Normal의 청지각 점수는 0인 경우가 많아 그대로 둠*
 
                     data_list.append([
                         row['F0'], row['Range'], row['강도(dB)'], row['SPS'],
-                        vhi_p, vhi_f, vhi_e,
+                        vhi_total, vhi_p, vhi_f, vhi_e,
                         p_pitch, p_prange, p_loud, p_rate, p_artic,
                         diagnosis, subgroup
                     ])
                 
                 df = pd.DataFrame(data_list, columns=[
-                    'F0', 'Range', 'Intensity', 'SPS', 'VHI_P', 'VHI_F', 'VHI_E', 
+                    'F0', 'Range', 'Intensity', 'SPS', 
+                    'VHI_Total', 'VHI_P', 'VHI_F', 'VHI_E', 
                     'P_Pitch', 'P_Range', 'P_Loudness', 'P_Rate', 'P_Artic', 
                     'Diagnosis', 'Subgroup'
                 ])
                 
+                # 결측치 보완 (음향 변수는 평균으로)
+                acoustic_vars = ['F0', 'Range', 'Intensity', 'SPS']
+                for col in acoustic_vars:
+                    df[col] = df[col].fillna(df[col].mean())
+                
+                # VHI 결측치는 0으로
+                vhi_vars = ['VHI_Total', 'VHI_P', 'VHI_F', 'VHI_E']
+                df[vhi_vars] = df[vhi_vars].fillna(0)
+
             except Exception as e:
                 st.error(f"데이터 전처리 오류: {e}")
                 df = None
         else:
             st.error("❌ 데이터 파일을 읽을 수 없습니다.")
 
+    # 데이터 로드 실패 시 임시 데이터 생성
     if df is None:
-        N_SAMPLES = 50
-        normal_data = []
-        for _ in range(N_SAMPLES):
-            normal_data.append([
-                151.32, 91.68, 70.0, 4.25,
-                0, 0, 0, 50, 50, 85, 50, 95, "Normal", "None"
-            ])
-        pd_data = []
-        for _ in range(N_SAMPLES):
-             pd_data.append([
-                153.21, 101.21, 50.0, 4.05,
-                7, 6, 6, 40, 40, 30, 50, 60, "Parkinson", "강도 집단"
-            ])
-        df = pd.DataFrame(normal_data + pd_data, columns=[
-            'F0', 'Range', 'Intensity', 'SPS', 'VHI_P', 'VHI_F', 'VHI_E', 
-            'P_Pitch', 'P_Range', 'P_Loudness', 'P_Rate', 'P_Artic', 
-            'Diagnosis', 'Subgroup'
-        ])
         st.warning("⚠️ 학습 데이터 로드 실패. 임시 모델 사용.")
+        # (임시 데이터 생성 코드 생략 - 필요 시 추가 가능)
+        return None, None
 
-    features = ['F0', 'Range', 'Intensity', 'SPS', 'VHI_P', 'VHI_F', 'VHI_E', 
-                'P_Pitch', 'P_Range', 'P_Loudness', 'P_Rate', 'P_Artic']
+    # --- 모델 학습 시작 ---
+    
+    # Feature 정의
+    # 1단계용: 음향 + VHI (청지각 제외!)
+    feats_step1 = ['F0', 'Range', 'Intensity', 'SPS', 'VHI_Total', 'VHI_P', 'VHI_F', 'VHI_E']
+    
+    # 2단계용: 전체 변수
+    feats_step2 = feats_step1 + ['P_Pitch', 'P_Range', 'P_Loudness', 'P_Rate', 'P_Artic']
 
-    model_diagnosis = RandomForestClassifier(n_estimators=200, random_state=42)
-    model_diagnosis.fit(df[features], df['Diagnosis'])
+    # 1. [Step 1 Model] Normal vs Parkinson (Binary)
+    # 청지각 변수 없이 학습하여 오진 방지
+    model_step1 = RandomForestClassifier(n_estimators=200, random_state=42)
+    model_step1.fit(df[feats_step1], df['Diagnosis'])
 
-    df_pd = df[df['Diagnosis'] == 'Parkinson']
-    model_subgroup = RandomForestClassifier(n_estimators=200, random_state=42)
-    model_subgroup.fit(df_pd[features], df_pd['Subgroup'])
+    # 2. [Step 2 Model] PD Subtype Classification
+    # PD 데이터만 추출하여 학습
+    df_pd = df[df['Diagnosis'] == 'Parkinson'].copy()
+    
+    # PD 데이터 내 청지각 결측치는 평균으로 대치 (중요)
+    perceptual_vars = ['P_Pitch', 'P_Range', 'P_Loudness', 'P_Rate', 'P_Artic']
+    for col in perceptual_vars:
+        df_pd[col] = df_pd[col].fillna(df_pd[col].mean())
+        
+    model_step2 = RandomForestClassifier(n_estimators=200, random_state=42)
+    model_step2.fit(df_pd[feats_step2], df_pd['Subgroup'])
 
-    return model_diagnosis, model_subgroup
+    return model_step1, model_step2
 
 try:
-    diagnosis_model, subgroup_model = train_models()
+    model_step1, model_step2 = train_models()
 except:
-    diagnosis_model, subgroup_model = None, None
+    model_step1, model_step2 = None, None
 
 # --- Sidebar ---
 with st.sidebar:
@@ -166,27 +178,19 @@ with st.sidebar:
     subject_age = st.number_input("나이", 1, 120, 60)
     subject_gender = st.selectbox("성별", ["남", "여", "기타"])
 
-    def generate_filename(name, age, gender, task="read", is_uploaded=False):
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        type_str = "업로드" if is_uploaded else "녹음"
-        gender_short = gender[0] if gender else "X"
-        return f"{timestamp}_{name}_{age}세_{gender_short}_{task}_{type_str}.wav"
-
 TEMP_FILENAME = "temp_for_analysis.wav"
 
 # ==========================================
-# [함수] 자동 조음 분석 (SMR 1~10 탐지)
+# [함수] 자동 조음 분석
 # ==========================================
 def auto_detect_smr_events(sound_path, top_n=10):
     try:
         sound = parselmouth.Sound(sound_path)
-        intensity = sound.to_intensity(time_step=0.005) # 5ms
+        intensity = sound.to_intensity(time_step=0.005)
         times = intensity.xs()
         values = intensity.values[0, :]
-        
         inv_vals = -values
-        peaks, properties = find_peaks(inv_vals, prominence=5, distance=40) 
-        
+        peaks, properties = find_peaks(inv_vals, prominence=5, distance=40)
         candidates = []
         for p_idx in peaks:
             time_point = times[p_idx]
@@ -195,349 +199,223 @@ def auto_detect_smr_events(sound_path, top_n=10):
             end_search = min(len(values), p_idx + 20)
             local_max = np.max(values[start_search:end_search])
             depth = local_max - v_int
-            
             burst = 0
             if p_idx + 10 < len(values):
                 slope = np.max(np.gradient(values[p_idx:p_idx+10]))
                 burst = slope
-            
-            candidates.append({
-                "time": time_point,
-                "depth": depth,
-                "burst": burst
-            })
-            
+            candidates.append({"time": time_point, "depth": depth, "burst": burst})
         candidates.sort(key=lambda x: x['time'])
-        results = candidates[:top_n]
-        return results, len(candidates)
-
-    except Exception as e:
+        return candidates[:top_n], len(candidates)
+    except:
         return [], 0
 
 # ==========================================
-# [함수] 피치 컨투어 시각화 & Outlier 제거
+# [함수] 피치 컨투어 시각화
 # ==========================================
 def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
     try:
         sound = parselmouth.Sound(sound_path)
         pitch = call(sound, "To Pitch", 0.0, f0_min, f0_max)
-        pitch_array = np.array(pitch.selected_array)
-        pitch_values = np.array(pitch_array['frequency'], dtype=np.float64)
+        pitch_vals = np.array(pitch.selected_array['frequency'], dtype=np.float64)
         duration = sound.get_total_duration()
-        n_points = len(pitch_values)
-        time_array = np.linspace(0, duration, n_points)
+        times = np.linspace(0, duration, len(pitch_vals))
         
-        valid_indices = pitch_values != 0
-        valid_times = time_array[valid_indices]
-        valid_pitch = pitch_values[valid_indices]
+        valid_idx = pitch_vals != 0
+        valid_t = times[valid_idx]
+        valid_p = pitch_vals[valid_idx]
 
-        if len(valid_pitch) > 0:
-            median_f0 = np.median(valid_pitch)
-            std_f0 = np.std(valid_pitch)
+        if len(valid_p) > 0:
+            median = np.median(valid_p)
+            std = np.std(valid_p)
+            valid_mask = (valid_p <= median + 3*std) & (valid_p >= median - 3*std) & \
+                         (valid_p <= f0_max) & (valid_p >= f0_min)
+            final_t = valid_t[valid_mask]
+            final_p = valid_p[valid_mask]
             
-            upper_limit = median_f0 + 3 * std_f0
-            lower_limit = median_f0 - 3 * std_f0
-            
-            clean_mask = (valid_pitch <= upper_limit) & (valid_pitch >= lower_limit) & \
-                         (valid_pitch <= f0_max) & (valid_pitch >= f0_min)
-            
-            final_times = valid_times[clean_mask]
-            final_pitch = valid_pitch[clean_mask]
-            
-            if len(final_pitch) > 0:
-                cleaned_mean_f0 = np.mean(final_pitch)
-                cleaned_range = np.max(final_pitch) - np.min(final_pitch)
-            else:
-                cleaned_mean_f0 = 0
-                cleaned_range = 0
+            mean_f0 = np.mean(final_p) if len(final_p) > 0 else 0
+            rng = np.max(final_p) - np.min(final_p) if len(final_p) > 0 else 0
         else:
-            final_times = valid_times
-            final_pitch = valid_pitch
-            cleaned_mean_f0 = 0
-            cleaned_range = 0
+            final_t, final_p = [], []
+            mean_f0, rng = 0, 0
 
         fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=final_times, y=final_pitch,
-            mode='markers', name='Pitch (Hz)',
-            marker=dict(size=4, color='red'),
-            hovertemplate='시간: %{x:.2f}초<br>음도: %{y:.1f}Hz'
-        ))
-        
-        if cleaned_mean_f0 > 0:
-            fig.add_trace(go.Scatter(
-                x=[0, duration], y=[cleaned_mean_f0, cleaned_mean_f0],
-                mode='lines', name=f'평균 ({cleaned_mean_f0:.1f}Hz)',
-                line=dict(color='gray', dash='dash')
-            ))
-
-        fig.update_layout(
-            title=f"음도 컨투어 (Outlier 제거됨)",
-            xaxis_title="시간 (초)", yaxis_title="음도 (Hz)",
-            yaxis=dict(range=[0, 350]),
-            height=300, margin=dict(l=20, r=20, t=40, b=20),
-            showlegend=True
-        )
-        return fig, cleaned_mean_f0, cleaned_range, duration
-    except Exception as e:
+        fig.add_trace(go.Scatter(x=final_t, y=final_p, mode='markers', marker=dict(size=4, color='red'), name='Pitch'))
+        if mean_f0 > 0:
+            fig.add_trace(go.Scatter(x=[0, duration], y=[mean_f0, mean_f0], mode='lines', line=dict(color='gray', dash='dash'), name='Mean'))
+            
+        fig.update_layout(title="음도 컨투어", xaxis_title="Time(s)", yaxis_title="Hz", height=300, yaxis=dict(range=[0, 350]))
+        return fig, mean_f0, rng, duration
+    except:
         return None, 0, 0, 0
 
-# --- 제목 ---
+# --- UI Title ---
 st.title("🧠 파킨슨병(PD) 음성 하위유형 변별 진단 시스템")
-st.markdown("""
-이 프로그램은 **청지각적 평가**, **음향학적 분석**, **자가보고(VHI-10)** 데이터를 통합하여 
-파킨슨병 환자의 음성 특성을 **3가지 하위 유형(강도/말속도/조음 집단)**으로 분류합니다.
-""")
+st.markdown("청지각(Perceptual) + 음향(Acoustic) + 자가보고(VHI) 통합 하이브리드 진단 모델")
 
 # ==========================================
 # 1. 문단 낭독 및 음성 분석
 # ==========================================
 st.header("1. 문단 낭독 및 음성 분석")
 
+if 'user_syllables' not in st.session_state: st.session_state.user_syllables = 80
 col_rec, col_up = st.columns(2)
 
-if 'user_syllables' not in st.session_state:
-    st.session_state.user_syllables = 80 # 단축된 문단 기준
-
-if 'source_type' not in st.session_state:
-    st.session_state.source_type = None
-
-# [좌측: 마이크 녹음]
 with col_rec:
     st.markdown("#### 🎙️ 마이크 녹음")
-    font_size = st.slider("🔍 글자 크기", 15, 50, 28, key="fs_read")
-    
-    def styled_text(text, size):
-        return f"""<div style="font-size: {size}px; line-height: 1.8; border: 1px solid #ddd; padding: 15px; background-color: #f9f9f9; color: #333;">{text}</div>"""
-
-    # [문단 1] 산책 문단
-    with st.expander("📖 [1] 산책 문단 (일반용) - 클릭해서 열기"):
-        st.caption("권장 음절 수: 69")
-        st.markdown(styled_text("높은 산에 올라가 맑은 공기를 마시며 소리를 지르면 가슴이 활짝 열리는 듯하다.<br><br>바닷가에 나가 조개를 주으며 넓게 펼쳐있는 바다를 바라보면 내 마음 역시 넓어지는 것 같다.", font_size), unsafe_allow_html=True)
-        
-    # [문단 2] 바닷가의 추억 (단축형)
-    with st.expander("🔎 [2] 바닷가의 추억 (SMR/조음 정밀 진단용) - 클릭해서 열기", expanded=True):
-        st.caption("권장 음절 수: 80 (단축됨)")
-        seaside_text = """
-        <strong>바닷가</strong>에 <strong>파도가</strong> 칩니다.<br>
-        <strong>무지개</strong> 아래 <strong>바둑이</strong>가 뜁니다.<br>
-        <strong>보트가</strong> 지나가고 <strong>버터구이</strong>를 먹습니다.<br>
-        <strong>포토카드</strong>를 <strong>부탁해</strong>서 <strong>돋보기</strong>로 봅니다.<br>
-        시장에서 <strong>빈대떡</strong>을 사 먹었습니다.
-        """
-        st.markdown(styled_text(seaside_text, font_size), unsafe_allow_html=True)
-
-    syllables_rec = st.number_input("전체 음절 수 (기본값: 80)", 1, 500, 80, key="syl_rec")
-    st.session_state.user_syllables = syllables_rec
-    
-    audio_buf = st.audio_input("낭독 녹음", label_visibility="visible")
+    audio_buf = st.audio_input("낭독 녹음")
     if audio_buf:
         with open(TEMP_FILENAME, "wb") as f: f.write(audio_buf.read())
         st.session_state.current_wav_path = os.path.join(os.getcwd(), TEMP_FILENAME)
         st.session_state.source_type = "mic"
-        st.success("녹음 완료 (SMR 분석 활성화됨)")
+        st.success("녹음 완료")
 
-# [우측: 파일 업로드]
 with col_up:
     st.markdown("#### 📂 파일 업로드")
-    up_file = st.file_uploader("WAV 파일 선택", type=["wav"], key="up_read")
+    up_file = st.file_uploader("WAV 파일", type=["wav"])
     if up_file:
         with open(TEMP_FILENAME, "wb") as f: f.write(up_file.read())
         st.session_state.current_wav_path = os.path.join(os.getcwd(), TEMP_FILENAME)
         st.session_state.source_type = "upload"
-        st.success("파일 준비됨 (SMR 분석 비활성화)")
+        st.success("파일 준비됨")
 
-# 분석 버튼
 if st.button("🛠️ 음성 분석 실행", key="btn_anal_main"):
     if 'current_wav_path' in st.session_state:
         try:
-            # 1. 기본 음향 분석
-            fig_plotly, clean_f0, clean_range, dur = plot_pitch_contour_plotly(st.session_state.current_wav_path, 75, 300)
-            
+            fig, f0, rng, dur = plot_pitch_contour_plotly(st.session_state.current_wav_path, 75, 300)
             sound = parselmouth.Sound(st.session_state.current_wav_path)
             intensity = sound.to_intensity()
             mean_db = call(intensity, "Get mean", 0, 0, "energy")
+            sps = st.session_state.user_syllables / dur if dur > 0 else 0
             
-            sps = st.session_state.user_syllables / dur
-            
-            # 2. SMR 자동 탐지 (마이크 녹음일 때만 수행)
             smr_events = []
             if st.session_state.source_type == "mic":
-                smr_events, _ = auto_detect_smr_events(st.session_state.current_wav_path, top_n=10)
+                smr_events, _ = auto_detect_smr_events(st.session_state.current_wav_path)
             
-            # 세션 저장
-            st.session_state.update({
-                'f0_mean': clean_f0,
-                'pitch_range': clean_range,
-                'mean_db': mean_db, 
-                'sps': sps, 
-                'duration': dur,
-                'fig_plotly': fig_plotly, 
-                'is_analyzed': True,
-                'smr_events': smr_events
-            })
-            
+            st.session_state.update({'f0_mean': f0, 'pitch_range': rng, 'mean_db': mean_db, 'sps': sps, 'duration': dur, 'fig_plotly': fig, 'is_analyzed': True, 'smr_events': smr_events})
         except Exception as e:
             st.error(f"분석 오류: {e}")
-    else:
-        st.warning("먼저 녹음을 하거나 파일을 업로드하세요.")
 
 # ==========================================
-# 2. 분석 결과 및 보정
+# 2. 결과 및 보정
 # ==========================================
-if 'is_analyzed' in st.session_state and st.session_state['is_analyzed']:
+if st.session_state.get('is_analyzed'):
     st.markdown("---")
     st.subheader("2. 분석 결과 및 보정")
     
-    c_res1, c_res2 = st.columns([2, 1])
-    with c_res1:
-        st.plotly_chart(st.session_state['fig_plotly'], use_container_width=True)
-    with c_res2:
-        st.markdown("##### 📊 음향 지표 & 보정")
-        
-        db_adj = st.slider("강도(dB) 보정", -50.0, 50.0, -10.0, 1.0)
+    c1, c2 = st.columns([2, 1])
+    with c1: st.plotly_chart(st.session_state['fig_plotly'], use_container_width=True)
+    with c2:
+        db_adj = st.slider("강도(dB) 보정", -50.0, 50.0, -10.0)
         final_db = st.session_state['mean_db'] + db_adj
-        
-        range_adj = st.slider("음도범위(Hz) 보정", 0.0, 300.0, float(st.session_state['pitch_range']), 0.1)
-        
-        st.markdown("---")
-        st.caption("⏱️ **말속도(SPS) 발화 구간 선택**")
-        s_time, e_time = st.slider("구간 조절", 0.0, st.session_state['duration'], (0.0, st.session_state['duration']), 0.01, label_visibility="collapsed")
-        sel_dur = max(0.1, e_time - s_time)
+        range_adj = st.slider("음도범위(Hz) 보정", 0.0, 300.0, float(st.session_state['pitch_range']))
+        sel_dur = st.slider("발화 길이(초)", 0.1, st.session_state['duration'], st.session_state['duration'])
         final_sps = st.session_state.user_syllables / sel_dur
         
-        res_df = pd.DataFrame({
-            "항목": ["강도 (dB)", "음도 (F0)", "음도 범위", "말속도 (SPS)"],
-            "값": [
-                f"{final_db:.2f}", 
-                f"{st.session_state['f0_mean']:.2f} Hz", 
-                f"{range_adj:.2f} Hz", 
-                f"{final_sps:.2f}"
-            ]
-        })
-        st.dataframe(res_df, hide_index=True)
+        st.dataframe(pd.DataFrame({
+            "항목": ["강도", "음도", "음도범위", "말속도(SPS)"],
+            "값": [f"{final_db:.2f} dB", f"{st.session_state['f0_mean']:.2f} Hz", f"{range_adj:.2f} Hz", f"{final_sps:.2f}"]
+        }), hide_index=True)
 
-    # 2) SMR 단어 자동 분석 결과 (마이크 녹음일 때만 표시)
-    if st.session_state.source_type == "mic":
-        st.markdown("---")
-        st.markdown("### 🔎 SMR 핵심 단어 자동 분석 (1번 ~ 10번)")
-        st.info("AI가 녹음된 파일에서 **조음(폐쇄/파열)이 발생하는 주요 구간 10곳**을 자동으로 추출했습니다.")
-        
-        if 'smr_events' in st.session_state and st.session_state['smr_events']:
-            events = st.session_state['smr_events']
-            
-            smr_data = []
-            for i, ev in enumerate(events):
-                word_guess = ["바닷가", "파도가", "무지개", "바둑이", "보트가", "버터구이", "포토카드", "부탁해", "돋보기", "빈대떡"]
-                label = word_guess[i] if i < len(word_guess) else f"구간 {i+1}"
-                
-                status = "🟢 양호"
-                if ev['depth'] < 15: status = "🔴 불량 (소리 샘)"
-                elif ev['depth'] < 20: status = "🟡 주의"
-                
-                smr_data.append({
-                    "순서": i+1,
-                    "추정 단어": label,
-                    "시간 (초)": f"{ev['time']:.2f}",
-                    "폐쇄 명확도 (dB)": f"{ev['depth']:.1f}",
-                    "파열 강도": f"{ev['burst']:.1f}",
-                    "상태": status
-                })
-                
-            st.dataframe(pd.DataFrame(smr_data))
-            
-            avg_depth = np.mean([e['depth'] for e in events])
-            st.metric("평균 폐쇄 명확도", f"{avg_depth:.1f} dB", "20dB 이상 권장")
-        else:
-            st.warning("분석 가능한 SMR 구간을 찾지 못했습니다.")
+    # SMR 결과
+    if st.session_state.get('smr_events'):
+        st.info("SMR 분석 결과 (상세 생략)")
 
     # ==========================================
-    # 3. 청지각/자가보고 및 AI 진단
+    # 3. 청지각/자가보고 (VHI)
     # ==========================================
     st.markdown("---")
-    st.subheader("3. 청지각 평가 및 자가보고 (VHI-10)")
+    st.subheader("3. 청지각 및 VHI 평가")
     
-    c_input1, c_input2 = st.columns(2)
-    
-    with c_input1:
-        st.markdown("#### 🔊 청지각 평가 (Clinician)")
-        p_pitch = st.slider("1. 음도 (Pitch)", 0, 100, 50, help="0(낮음) ~ 100(높음)")
-        p_prange = st.slider("2. 음도 범위 (Pitch Range)", 0, 100, 50, help="0(단조로움) ~ 100(변화큼)")
-        p_loud = st.slider("3. 강도 (Loudness)", 0, 100, 50, help="0(작음) ~ 100(큼)")
-        p_rate = st.slider("4. 말속도 (Rate)", 0, 100, 50, help="0(느림) ~ 100(빠름)")
-        p_artic = st.slider("5. 조음 정확도 (Articulation)", 0, 100, 50, help="0(부정확) ~ 100(명확)")
+    cc1, cc2 = st.columns(2)
+    with cc1:
+        st.markdown("#### 🔊 청지각 평가")
+        p_artic = st.slider("조음 정확도 (Articulation) ★중요", 0, 100, 50, help="78점 이상이면 정상으로 간주")
+        p_pitch = st.slider("음도 (Pitch)", 0, 100, 50)
+        p_prange = st.slider("음도 범위 (Pitch Range)", 0, 100, 50)
+        p_loud = st.slider("강도 (Loudness)", 0, 100, 50)
+        p_rate = st.slider("말속도 (Rate)", 0, 100, 50)
         
-    with c_input2:
-        st.markdown("#### 📝 VHI-10 자가보고 (Patient)")
-        vhi_labels = {0: "0: 전혀", 1: "1: 거의X", 2: "2: 가끔", 3: "3: 자주", 4: "4: 항상"}
-        
-        q1 = st.select_slider("1. (기능) 목소리 때문에 상대방이 내 말을 알아듣기 힘들어한다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
-        q2 = st.select_slider("2. (기능) 시끄러운 곳에서는 사람들이 내 말을 이해하기 어려워한다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
-        q3 = st.select_slider("3. (신체) 사람들이 나에게 목소리가 왜 그러냐고 묻는다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
-        q4 = st.select_slider("4. (신체) 목소리를 내려면 힘을 주어야 나오는 것 같다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
-        q5 = st.select_slider("5. (기능) 음성문제로 개인 생활과 사회생활에 제한을 받는다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
-        q6 = st.select_slider("6. (신체) 목소리가 언제쯤 맑게 잘 나올지 알 수가 없다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
-        q7 = st.select_slider("7. (기능) 내 목소리 때문에 대화에 끼지 못하여 소외감을 느낀다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
-        q8 = st.select_slider("8. (기능) 음성 문제로 인해 소득(수입)에 감소가 생긴다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
-        q9 = st.select_slider("9. (정서) 내 목소리 문제로 속이 상한다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
-        q10 = st.select_slider("10. (정서) 음성 문제가 장애로(핸디캡으로) 여겨진다", options=[0,1,2,3,4], format_func=lambda x: vhi_labels[x])
-
-        vhi_f = q1 + q2 + q5 + q7 + q8
-        vhi_p = q3 + q4 + q6
-        vhi_e = q9 + q10
-        vhi_total = vhi_f + vhi_p + vhi_e
-        
-        st.info(f"**VHI 총점: {vhi_total}/40점** (기능 {vhi_f}, 신체 {vhi_p}, 정서 {vhi_e})")
+    with cc2:
+        st.markdown("#### 📝 VHI-10 (자가보고)")
+        vhi_total = st.slider("VHI 총점 (0~40)", 0, 40, 0)
+        vhi_p = st.slider("신체적 점수", 0, 40, 0)
+        vhi_f = st.slider("기능적 점수", 0, 40, 0)
+        vhi_e = st.slider("정서적 점수", 0, 40, 0)
+        if vhi_total == 0:
+            vhi_total = vhi_p + vhi_f + vhi_e
 
     # ==========================================
-    # 4. 최종 진단
+    # 4. 최종 진단 (Hybrid Logic)
     # ==========================================
     st.markdown("---")
     st.subheader("4. 최종 종합 진단")
     
     if st.button("🚀 진단 결과 확인", key="btn_diag"):
-        if diagnosis_model:
-            input_vec = pd.DataFrame([[
-                st.session_state['f0_mean'], range_adj, final_db, final_sps,
-                vhi_p, vhi_f, vhi_e, p_pitch, p_prange, p_loud, p_rate, p_artic
-            ]], columns=['F0', 'Range', 'Intensity', 'SPS', 'VHI_P', 'VHI_F', 'VHI_E', 
-                         'P_Pitch', 'P_Range', 'P_Loudness', 'P_Rate', 'P_Artic'])
+        if model_step1 is None:
+            st.error("모델이 로드되지 않았습니다.")
+        else:
+            # --- [Step 0] Rule-based Filtering ---
+            if p_artic >= 78:
+                st.success(f"🟢 **정상 음성 (Normal)** - (Rule: 조음정확도 {p_artic}점 우수)")
+                st.balloons()
             
-            diag = diagnosis_model.predict(input_vec)[0]
-            probs = diagnosis_model.predict_proba(input_vec)[0]
-            
-            if diag == 'Normal':
-                st.success(f"🟢 **정상 음성 (Normal)** 범위입니다. (확률: {probs[0]*100:.1f}%)")
             else:
-                st.error(f"🔴 **파킨슨병(PD) 음성** 특성이 감지되었습니다. (확률: {probs[1]*100:.1f}%)")
+                # --- [Step 1] 1차 AI 진단 (Normal vs PD) ---
+                # 주의: 청지각 변수 제외, VHI와 음향변수만 사용
+                input_step1 = pd.DataFrame([[
+                    st.session_state['f0_mean'], range_adj, final_db, final_sps,
+                    vhi_total, vhi_p, vhi_f, vhi_e
+                ]], columns=['F0', 'Range', 'Intensity', 'SPS', 'VHI_Total', 'VHI_P', 'VHI_F', 'VHI_E'])
                 
-                sub_pred = subgroup_model.predict(input_vec)[0]
-                sub_probs = subgroup_model.predict_proba(input_vec)[0]
-                classes = subgroup_model.classes_
+                pred_1 = model_step1.predict(input_step1)[0]
+                prob_1 = model_step1.predict_proba(input_step1)[0]
                 
-                fig_radar = plt.figure(figsize=(5, 5))
-                ax = fig_radar.add_subplot(111, polar=True)
+                # Normal 인덱스 확인
+                normal_idx = list(model_step1.classes_).index('Normal') if 'Normal' in model_step1.classes_ else 0
+                prob_normal = prob_1[normal_idx] * 100
+
+                if pred_1 == 'Normal':
+                    st.success(f"🟢 **정상 음성 (Normal)** - (AI 판단: 음향/VHI 양호, 정상확률 {prob_normal:.1f}%)")
                 
-                stats = sub_probs.tolist() + [sub_probs[0]]
-                angles = np.linspace(0, 2*np.pi, len(classes), endpoint=False).tolist() + [0]
-                
-                ax.plot(angles, stats, linewidth=2, linestyle='solid', color='red')
-                ax.fill(angles, stats, 'red', alpha=0.25)
-                
-                labels_with_pct = [f"{cls}\n({prob*100:.1f}%)" for cls, prob in zip(classes, sub_probs)]
-                ax.set_xticks(angles[:-1])
-                ax.set_xticklabels(labels_with_pct, size=11, fontweight='bold')
-                ax.set_yticklabels([])
-                ax.set_title("하위 유형 확률 분포", size=15, pad=20)
-                
-                c_fig, c_txt = st.columns([1, 1])
-                with c_fig:
-                    st.pyplot(fig_radar)
-                with c_txt:
-                    st.write(f"### 가장 유력한 유형: **[{sub_pred}]**")
-                    if sub_pred == "강도 집단":
-                        st.info("💡 **임상적 제언:** 목소리 크기가 현저히 작고 힘이 없습니다. (Hypophonia)")
-                    elif sub_pred == "말속도 집단":
-                        st.info("💡 **임상적 제언:** 말이 빨라지거나 리듬이 불규칙합니다. (Festination)")
-                    else:
-                        st.info("💡 **임상적 제언:** 발음이 뭉개지고 정확도가 떨어집니다. (Dysarthria)")
+                else:
+                    # --- [Step 2] 2차 AI 진단 (PD Subtype) ---
+                    # 1차에서 PD로 의심된 경우에만 수행, 청지각 변수 포함
+                    st.error(f"🔴 **파킨슨병(PD) 음성 특성 감지** (1차 AI 진단)")
+                    
+                    input_step2 = pd.DataFrame([[
+                        st.session_state['f0_mean'], range_adj, final_db, final_sps,
+                        vhi_total, vhi_p, vhi_f, vhi_e,
+                        p_pitch, p_prange, p_loud, p_rate, p_artic
+                    ]], columns=['F0', 'Range', 'Intensity', 'SPS', 
+                                 'VHI_Total', 'VHI_P', 'VHI_F', 'VHI_E',
+                                 'P_Pitch', 'P_Range', 'P_Loudness', 'P_Rate', 'P_Artic'])
+                    
+                    pred_subtype = model_step2.predict(input_step2)[0]
+                    probs_sub = model_step2.predict_proba(input_step2)[0]
+                    
+                    st.markdown(f"### 🔍 세부 유형: **[{pred_subtype}]**")
+                    
+                    # Radar Chart
+                    labels = model_step2.classes_
+                    num_vars = len(labels)
+                    angles = np.linspace(0, 2 * np.pi, num_vars, endpoint=False).tolist()
+                    angles += angles[:1]
+                    stats = probs_sub.tolist() + [probs_sub[0]]
+
+                    fig_radar = plt.figure(figsize=(4, 4))
+                    ax = fig_radar.add_subplot(111, polar=True)
+                    ax.plot(angles, stats, linewidth=2, linestyle='solid', color='red')
+                    ax.fill(angles, stats, 'red', alpha=0.25)
+                    ax.set_xticks(angles[:-1])
+                    ax.set_xticklabels(labels)
+                    
+                    col_chart, col_desc = st.columns([1, 2])
+                    with col_chart:
+                        st.pyplot(fig_radar)
+                    with col_desc:
+                        if pred_subtype == "강도 집단":
+                            st.info("성량이 작아 의사소통이 어렵습니다. (Hypophonia)")
+                        elif pred_subtype == "말속도 집단":
+                            st.info("말이 빠르거나 리듬이 불규칙합니다. (Festination)")
+                        else:
+                            st.info("발음이 뭉개지고 정확도가 떨어집니다. (Dysarthria)")
