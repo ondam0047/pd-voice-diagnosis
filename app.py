@@ -374,7 +374,6 @@ if st.session_state.get('is_analyzed'):
     
     with cc1:
         st.markdown("#### 🔊 청지각 평가")
-        st.caption("※ 78점 이상이면 정상으로 간주합니다.")
         # [수정] 중요 표시 별표 제거
         p_artic = st.slider("조음 정확도 (Articulation)", 0, 100, 50, help="78점 이상이면 정상으로 간주됩니다.")
         p_pitch = st.slider("음도 (Pitch)", 0, 100, 50)
@@ -495,3 +494,4 @@ if st.session_state.get('is_analyzed'):
                             st.warning("💡 **특징:** 말이 빠르거나 리듬이 불규칙합니다. (Festination)")
                         else:
                             st.warning("💡 **특징:** 발음이 뭉개지고 정확도가 떨어집니다. (Dysarthria)")
+
