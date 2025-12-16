@@ -17,7 +17,6 @@ st.set_page_config(page_title="PD 음성 변별 진단 시스템", layout="wide"
 # ==========================================
 # [중요] 변수 전역 설정 (NameError 방지)
 # ==========================================
-# 모델 학습과 예측에 공통으로 사용될 특성(Column) 이름을 미리 정의합니다.
 FEATS_STEP1 = ['F0', 'Range', 'Intensity', 'SPS', 'VHI_Total', 'VHI_P', 'VHI_F', 'VHI_E']
 FEATS_STEP2 = FEATS_STEP1 + ['P_Pitch', 'P_Range', 'P_Loudness', 'P_Rate', 'P_Artic']
 
@@ -42,7 +41,7 @@ def setup_korean_font():
 setup_korean_font()
 
 # ==========================================
-# 0. 머신러닝 모델 학습
+# 0. 머신러닝 모델 학습 (제공해주신 로직 유지)
 # ==========================================
 @st.cache_resource
 def train_models():
@@ -240,7 +239,9 @@ with col_rec:
         return f"""<div style="font-size: {size}px; line-height: 1.8; border: 1px solid #ddd; padding: 15px; background-color: #f9f9f9; color: #333;">{text}</div>"""
 
     with st.expander("📖 [1] 산책 문단 (일반용)"):
-        st.markdown(styled_text("높은 산에 올라가 맑은 공기를 마시며...", font_size), unsafe_allow_html=True)
+        # [수정 2] 산책 문단 전체 텍스트 적용
+        full_text = "높은 산에 올라가 맑은 공기를 마시며 소리를 지르면 가슴이 활짝 열리는 듯하다. 바닷가에 나가 조개를 주으며 넓게 펼쳐있는 바다를 바라보면 내 마음 역시 넓어지는 것 같다."
+        st.markdown(styled_text(full_text, font_size), unsafe_allow_html=True)
         
     with st.expander("🔎 [2] 바닷가의 추억 (SMR/조음 정밀 진단용)", expanded=True):
         seaside_text = """
@@ -267,6 +268,9 @@ with col_up:
     st.markdown("#### 📂 파일 업로드")
     up_file = st.file_uploader("WAV 파일 선택", type=["wav"], key="up_read")
     if up_file:
+        # [수정 1] 파일 업로드 시 음성 파일 들어볼 수 있게 기능 추가
+        st.audio(up_file, format='audio/wav')
+        
         with open(TEMP_FILENAME, "wb") as f: f.write(up_file.read())
         st.session_state.current_wav_path = os.path.join(os.getcwd(), TEMP_FILENAME)
         st.session_state.source_type = "upload"
@@ -349,20 +353,21 @@ if st.session_state.get('is_analyzed'):
         
         vhi_opts = [0, 1, 2, 3, 4]
         
+        # [수정 3] VHI-10에서 기능(F), 신체(P), 정서(E) 분류 텍스트(Header) 삭제
         with st.expander("VHI-10 문항 입력 (클릭)", expanded=True):
-            st.markdown("**기능(F) - 5문항 (20점 만점)**")
+            # 기능(F) 관련 문항
             q1 = st.select_slider("1. 상대방이 내 말을 알아듣기 힘들어한다", options=vhi_opts)
             q2 = st.select_slider("2. 시끄러운 곳에서 이해하기 어려워한다", options=vhi_opts)
             q5 = st.select_slider("5. 음성문제로 생활에 제한을 받는다", options=vhi_opts)
             q7 = st.select_slider("7. 대화에 끼지 못해 소외감을 느낀다", options=vhi_opts)
             q8 = st.select_slider("8. 음성 문제로 수입 감소가 생긴다", options=vhi_opts)
             
-            st.markdown("**신체(P) - 3문항 (12점 만점)**")
+            # 신체(P) 관련 문항
             q3 = st.select_slider("3. 사람들이 목소리가 왜 그러냐고 묻는다", options=vhi_opts)
             q4 = st.select_slider("4. 목소리를 내려면 힘을 주어야 한다", options=vhi_opts)
             q6 = st.select_slider("6. 목소리가 언제 맑게 나올지 알 수 없다", options=vhi_opts)
 
-            st.markdown("**정서(E) - 2문항 (8점 만점)**")
+            # 정서(E) 관련 문항
             q9 = st.select_slider("9. 내 목소리 문제로 속이 상한다", options=vhi_opts)
             q10 = st.select_slider("10. 음성 문제가 장애로 여겨진다", options=vhi_opts)
 
@@ -456,8 +461,11 @@ if st.session_state.get('is_analyzed'):
                         st.markdown(f"### 🔍 최종 예측 하위 유형: **[{final_decision}]**")
                         for msg in warn_msg: st.warning(msg)
                         
-                        # Radar Chart
+                        # [수정 4] 스파이더 차트 확률 추가
                         labels = list(model_step2.classes_)
+                        # 확률 정보를 라벨에 추가
+                        labels_with_probs = [f"{label}\n({prob*100:.1f}%)" for label, prob in zip(labels, probs_sub)]
+                        
                         fig_radar = plt.figure(figsize=(4, 4))
                         ax = fig_radar.add_subplot(111, polar=True)
                         angles = np.linspace(0, 2 * np.pi, len(labels), endpoint=False).tolist()
@@ -467,7 +475,7 @@ if st.session_state.get('is_analyzed'):
                         ax.plot(angles, stats, linewidth=2, linestyle='solid', color='red')
                         ax.fill(angles, stats, 'red', alpha=0.25)
                         ax.set_xticks(angles[:-1])
-                        ax.set_xticklabels(labels)
+                        ax.set_xticklabels(labels_with_probs) # 수정된 라벨 적용
                         
                         c_chart, c_desc = st.columns([1, 2])
                         with c_chart: st.pyplot(fig_radar)
