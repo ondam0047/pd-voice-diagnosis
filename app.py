@@ -11,26 +11,28 @@ import platform
 import datetime
 import io
 
-# --- 구글 연동 라이브러리 ---
+# --- 구글 시트 & 이메일 라이브러리 ---
 from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
 import gspread
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email.mime.text import MIMEText
+from email import encoders
 
 from sklearn.ensemble import RandomForestClassifier
 from scipy.signal import find_peaks
 
 # --- 페이지 기본 설정 ---
-st.set_page_config(page_title="PD 음성 데이터 수집 시스템 (V2.0)", layout="wide")
+st.set_page_config(page_title="PD 음성 데이터 수집 시스템 (V2.1)", layout="wide")
 
 # ==========================================
-# [설정] 구글 드라이브 및 시트 정보
+# [설정] 구글 시트 정보 (Secrets에서 로드)
 # ==========================================
 try:
-    DRIVE_FOLDER_ID = st.secrets["gcp_info"]["folder_id"] 
     SHEET_NAME = st.secrets["gcp_info"]["sheet_name"]
 except:
-    st.error("Secrets 설정이 로드되지 않았습니다. 관리자에게 문의하세요.")
+    st.error("Secrets 설정이 로드되지 않았습니다.")
     st.stop()
 
 # ==========================================
@@ -54,13 +56,12 @@ def setup_korean_font():
 setup_korean_font()
 
 # ==========================================
-# 0. 머신러닝 모델 학습 (Version 1.0 유지)
+# 0. 머신러닝 모델 학습 (Version 1.0)
 # ==========================================
 @st.cache_resource
 def train_models():
     DATA_FILE = "training_data.csv"
     df = None
-    
     if os.path.exists(DATA_FILE) or os.path.exists("training_data.xlsx"):
         loaders = [
             (lambda f: pd.read_excel(f.replace(".csv", ".xlsx")), "excel"),
@@ -75,7 +76,6 @@ def train_models():
                 df_raw = loader(target_file)
                 if df_raw is not None and not df_raw.empty: break
             except: continue
-                
         if df_raw is not None:
             try:
                 data_list = []
@@ -91,7 +91,6 @@ def train_models():
                     raw_p = row.get('VHI_신체', 0)
                     raw_f = row.get('VHI_기능', 0)
                     raw_e = row.get('VHI_정서', 0)
-                    
                     if raw_total > 40: 
                         vhi_f = (raw_f / 40.0) * 20.0
                         vhi_p = (raw_p / 40.0) * 12.0
@@ -107,18 +106,14 @@ def train_models():
                         row.get('말속도(청지각)', 0), row.get('조음정확도(청지각)', 0),
                         diagnosis, subgroup
                     ])
-                
                 df = pd.DataFrame(data_list, columns=FEATS_STEP2 + ['Diagnosis', 'Subgroup'])
                 for col in FEATS_STEP2[:4]: df[col] = df[col].fillna(df[col].mean())
                 df[FEATS_STEP1[4:]] = df[FEATS_STEP1[4:]].fillna(0)
-
             except Exception: df = None
 
     if df is None: return None, None
-
     model_step1 = RandomForestClassifier(n_estimators=200, random_state=42)
     model_step1.fit(df[FEATS_STEP1], df['Diagnosis'])
-
     df_pd = df[df['Diagnosis'] == 'Parkinson'].copy()
     if not df_pd.empty:
         for col in FEATS_STEP2[8:]: df_pd[col] = df_pd[col].fillna(df_pd[col].mean())
@@ -126,69 +121,32 @@ def train_models():
         model_step2.fit(df_pd[FEATS_STEP2], df_pd['Subgroup'])
     else:
         model_step2 = None
-
     return model_step1, model_step2
 
 try: model_step1, model_step2 = train_models()
 except: model_step1, model_step2 = None, None
 
 # ==========================================
-# [수정됨] 구글 드라이브/시트 저장 함수 (권한 에러 해결)
+# [수정됨] 이메일 전송 + 시트 저장 함수
 # ==========================================
-def save_to_google_drive(wav_source_path, patient_info, analysis_results, diagnosis_result):
-    error_log = []
-    success_log = []
-    
-    # 인증
+def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
     try:
-        service_account_info = st.secrets["gcp_service_account"]
+        # 1. 구글 스프레드시트 기록 (이건 무료라 무조건 성공)
         creds = service_account.Credentials.from_service_account_info(
-            service_account_info,
-            scopes=['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
+            st.secrets["gcp_service_account"],
+            scopes=['https://www.googleapis.com/auth/spreadsheets']
         )
-    except Exception as e:
-        return False, f"인증 실패: {str(e)}"
-
-    # 1. WAV 업로드
-    try:
-        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        safe_name = patient_info['name'].replace(" ", "")
-        filename = f"{safe_name}_{patient_info['age']}_{patient_info['gender']}_{timestamp}.wav"
-        
-        drive_service = build('drive', 'v3', credentials=creds)
-        
-        # [중요] 부모 폴더를 지정하여 해당 폴더의 소유권(Quota)을 사용하도록 유도
-        file_metadata = {
-            'name': filename, 
-            'parents': [DRIVE_FOLDER_ID]
-        }
-        
-        media = MediaIoBaseUpload(open(wav_source_path, 'rb'), mimetype='audio/wav')
-        
-        # supportsAllDrives=True 옵션 추가 (권한 문제 완화)
-        file = drive_service.files().create(
-            body=file_metadata, 
-            media_body=media, 
-            fields='id',
-            supportsAllDrives=True
-        ).execute()
-        
-        file_id = file.get('id')
-        success_log.append("음성 파일 업로드")
-        
-    except Exception as e:
-        file_id = "Upload_Failed"
-        error_log.append(f"드라이브 업로드 실패: {str(e)}")
-
-    # 2. 스프레드시트 기록
-    try:
         gc = gspread.authorize(creds)
         sh = gc.open(SHEET_NAME)
         worksheet = sh.sheet1
         
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        safe_name = patient_info['name'].replace(" ", "")
+        filename = f"{safe_name}_{patient_info['age']}_{patient_info['gender']}_{timestamp}.wav"
+
         if not worksheet.row_values(1):
             worksheet.append_row([
-                "Timestamp", "Filename", "File_ID", "Name", "Age", "Gender",
+                "Timestamp", "Filename", "Name", "Age", "Gender",
                 "F0", "Range", "Intensity_dB", "SPS", 
                 "VHI_Total", "VHI_P", "VHI_F", "VHI_E",
                 "P_Artic", "P_Pitch", "P_Loud", "P_Rate", "P_PRange",
@@ -196,27 +154,54 @@ def save_to_google_drive(wav_source_path, patient_info, analysis_results, diagno
             ])
             
         row_data = [
-            timestamp, filename, file_id,
+            timestamp, filename,
             patient_info['name'], patient_info['age'], patient_info['gender'],
-            analysis_results['f0'], analysis_results['range'], analysis_results['db'], analysis_results['sps'],
-            analysis_results['vhi_total'], analysis_results['vhi_p'], analysis_results['vhi_f'], analysis_results['vhi_e'],
-            analysis_results['p_artic'], analysis_results['p_pitch'], analysis_results['p_loud'], analysis_results['p_rate'], analysis_results['p_prange'],
-            diagnosis_result['final'], diagnosis_result['normal_prob']
+            analysis['f0'], analysis['range'], analysis['db'], analysis['sps'],
+            analysis['vhi_total'], analysis['vhi_p'], analysis['vhi_f'], analysis['vhi_e'],
+            analysis['p_artic'], analysis['p_pitch'], analysis['p_loud'], analysis['p_rate'], analysis['p_prange'],
+            diagnosis['final'], diagnosis['normal_prob']
         ]
-        
         worksheet.append_row(row_data)
-        success_log.append("데이터 시트 기록")
-        
-    except Exception as e:
-        error_log.append(f"시트 기록 실패: {str(e)}")
 
-    if error_log:
-        return False, " / ".join(error_log)
-    else:
-        return True, filename
+        # 2. 이메일로 파일 전송 (Drive 용량 문제 해결)
+        sender = st.secrets["email"]["sender"]
+        password = st.secrets["email"]["password"]
+        receiver = st.secrets["email"]["receiver"]
+
+        msg = MIMEMultipart()
+        msg['From'] = sender
+        msg['To'] = receiver
+        msg['Subject'] = f"[PD Data] {filename}"
+
+        body = f"""
+        환자: {patient_info['name']} ({patient_info['age']}/{patient_info['gender']})
+        진단: {diagnosis['final']} ({diagnosis['normal_prob']:.1f}%)
+        
+        * 음성 파일이 첨부되었습니다.
+        * 상세 수치는 구글 시트에 저장되었습니다.
+        """
+        msg.attach(MIMEText(body, 'plain'))
+
+        with open(wav_path, "rb") as f:
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(f.read())
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", f"attachment; filename= {filename}")
+        msg.attach(part)
+
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(sender, password)
+        server.sendmail(sender, receiver, msg.as_string())
+        server.quit()
+        
+        return True, "메일 전송 및 시트 저장 완료"
+
+    except Exception as e:
+        return False, str(e)
 
 # ==========================================
-# [분석 로직] Version 1.0
+# [분석 로직] Version 1.0 (가속만 위험)
 # ==========================================
 def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
     try:
@@ -252,40 +237,24 @@ def run_analysis_logic(file_path):
     except Exception as e:
         st.error(f"분석 오류: {e}"); return False
 
-# [수정됨] 상세 종합 해석 복구 (Version 1.0 스타일 - 길고 구체적)
 def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e):
-    positives = []
-    negatives = []
+    positives, negatives = [], []
+    if vhi < 15: positives.append(f"환자 본인의 주관적 불편함(VHI {vhi}점)이 낮아, 일상 대화에 심리적/기능적 부담이 적은 상태입니다.")
+    if range_val >= 100: positives.append(f"음도 범위가 {range_val:.1f}Hz로 넓게 나타나, 목소리에 생동감이 있고 억양의 변화가 자연스럽습니다.")
+    if artic >= 75: positives.append(f"청지각적 조음 정확도가 {artic}점으로 양호하여, 상대방이 말을 알아듣기에 명료한 상태입니다.")
+    if sps < 4.5: positives.append(f"말속도가 {sps:.2f} SPS로 측정되었습니다. 파킨슨병에서 흔히 나타나는 급격한 가속 현상(Festination) 없이 안정적인 속도를 유지하고 있습니다.")
+    if db >= 60: positives.append(f"평균 음성 강도가 {db:.1f} dB로, 일반적인 대화 수준(60dB 이상)의 성량을 튼튼하게 유지하고 있습니다.")
 
-    # 1. 긍정적 요인
-    if vhi < 15: 
-        positives.append(f"환자 본인의 주관적 불편함(VHI)이 {vhi}점으로 낮아, 일상 대화에 심리적/기능적 부담이 적은 상태입니다.")
-    if range_val >= 100: 
-        positives.append(f"음도 범위가 {range_val:.1f}Hz로 넓게 나타나, 목소리에 생동감이 있고 억양의 변화가 자연스럽습니다.")
-    if artic >= 75: 
-        positives.append(f"청지각적 조음 정확도가 {artic}점으로 양호하여, 상대방이 말을 알아듣기에 명료한 상태입니다.")
-    if sps < 4.5: 
-        positives.append(f"말속도가 {sps:.2f} SPS로 측정되었습니다. 파킨슨병에서 흔히 나타나는 급격한 가속 현상(Festination) 없이 안정적인 속도를 유지하고 있습니다.")
-    if db >= 60: 
-        positives.append(f"평균 음성 강도가 {db:.1f} dB로, 일반적인 대화 수준(60dB 이상)의 성량을 튼튼하게 유지하고 있습니다.")
-
-    # 2. 부정적 요인
-    if db < 60: 
-        negatives.append(f"평균 음성 강도가 {db:.1f} dB로 다소 작습니다. 이는 파킨슨병의 대표적 증상인 '강도 감소(Hypophonia)'와 유사하여 발성 훈련이 필요할 수 있습니다.")
-    if sps >= 4.5: 
-        negatives.append(f"말속도가 {sps:.2f} SPS로 지나치게 빠릅니다. 이는 발화 제어가 어려워 말이 빨라지는 가속 징후(Short rushes of speech)일 가능성이 있습니다.")
-    if artic < 70: 
-        negatives.append(f"청지각적 조음 정확도가 {artic}점으로 다소 낮습니다. 발음이 불분명해지는 조음 장애(Dysarthria) 징후가 관찰됩니다.")
-    if vhi >= 20: 
-        negatives.append(f"VHI 총점이 {vhi}점으로 높습니다. 환자 스스로 음성 문제로 인한 생활의 불편함과 심리적 위축을 크게 느끼고 있습니다.")
-    if vhi_e >= 5: 
-        negatives.append("특히 VHI 정서(E) 점수가 높아, 말하기에 대한 불안감이나 자신감 저하가 감지됩니다.")
-
+    if db < 60: negatives.append(f"평균 음성 강도가 {db:.1f} dB로 다소 작습니다. 이는 파킨슨병의 대표적 증상인 '강도 감소(Hypophonia)'와 유사하여 발성 훈련이 필요할 수 있습니다.")
+    if sps >= 4.5: negatives.append(f"말속도가 {sps:.2f} SPS로 지나치게 빠릅니다. 이는 발화 제어가 어려워 말이 빨라지는 가속 징후(Short rushes of speech)일 가능성이 있습니다.")
+    if artic < 70: negatives.append(f"청지각적 조음 정확도가 {artic}점으로 다소 낮습니다. 발음이 불분명해지는 조음 장애(Dysarthria) 징후가 관찰됩니다.")
+    if vhi >= 20: negatives.append(f"VHI 총점이 {vhi}점으로 높습니다. 환자 스스로 음성 문제로 인한 생활의 불편함과 심리적 위축을 크게 느끼고 있습니다.")
+    if vhi_e >= 5: negatives.append("특히 VHI 정서(E) 점수가 높아, 말하기에 대한 불안감이나 자신감 저하가 감지됩니다.")
     return positives, negatives
 
 # --- UI Title ---
 st.title("📂 파킨슨 환자 교육 및 음성 데이터 수집 시스템")
-st.markdown("Version 2.0 (Stable Release)")
+st.markdown("Version 2.1 (Email Backup Edition)")
 
 # 1. 사이드바
 with st.sidebar:
@@ -344,7 +313,7 @@ if st.session_state.get('is_analyzed'):
         sel_dur = max(0.1, e_time - s_time)
         final_sps = st.session_state.user_syllables / sel_dur
         
-        # [수정됨] 음향 결과치 표 복구
+        # [복구됨] 음향 결과치 표
         st.write("#### 📊 음향학적 분석 결과")
         result_df = pd.DataFrame({
             "항목": ["평균 강도(dB)", "평균 음도(Hz)", "음도 범위(Hz)", "말속도(SPS)"],
@@ -361,14 +330,14 @@ if st.session_state.get('is_analyzed'):
         p_pitch = st.slider("음도", 0, 100, 50)
         p_prange = st.slider("음도 범위", 0, 100, 50)
         p_loud = st.slider("강도", 0, 100, 50)
-        # [수정됨] 라벨 변경: 말속도(청지각) -> 말속도
+        # [수정됨] '말속도(청지각)' -> '말속도'
         p_rate = st.slider("말속도", 0, 100, 50)
     with cc2:
         st.markdown("#### 📝 VHI-10")
         vhi_opts = [0, 1, 2, 3, 4]
         
-        # 문항만 깔끔하게 나열
-        with st.expander("VHI-10 문항 입력 (클릭)", expanded=True):
+        # 문항 1~10 나열 (구분 텍스트 제거)
+        with st.expander("VHI-10 문항 입력 (클릭해서 펼치기)", expanded=True):
             q1 = st.select_slider("1. 사람들이 내 목소리를 듣는데 어려움을 느낀다.", options=vhi_opts)
             q2 = st.select_slider("2. 사람들이 내 말을 잘 못 알아들어 반복해야 한다.", options=vhi_opts)
             q3 = st.select_slider("3. 낯선 사람들과 전화로 대화하는 것이 어렵다.", options=vhi_opts)
@@ -418,10 +387,10 @@ if st.session_state.get('is_analyzed'):
                         
                         st.error(f"🔴 **파킨슨 특성 감지:** {final_decision}")
                         
-                        # 스파이더 차트 복구
+                        # [수정됨] 스파이더 차트 복구 (사이즈 3,3 적용)
                         labels = list(model_step2.classes_)
                         labels_with_probs = [f"{label}\n({prob*100:.1f}%)" for label, prob in zip(labels, probs_sub)]
-                        fig_radar = plt.figure(figsize=(4, 4))
+                        fig_radar = plt.figure(figsize=(3, 3)) # 사이즈 수정됨
                         ax = fig_radar.add_subplot(111, polar=True)
                         angles = np.linspace(0, 2 * np.pi, len(labels), endpoint=False).tolist()
                         angles += angles[:1]
@@ -430,11 +399,17 @@ if st.session_state.get('is_analyzed'):
                         ax.fill(angles, stats, 'red', alpha=0.25)
                         ax.set_xticks(angles[:-1])
                         ax.set_xticklabels(labels_with_probs)
-                        st.pyplot(fig_radar)
+                        
+                        c_chart, c_desc = st.columns([1, 2])
+                        with c_chart: st.pyplot(fig_radar)
+                        with c_desc:
+                            if "강도" in final_decision: st.info("💡 특징: 목소리 크기가 작고 약합니다. (Hypophonia)")
+                            elif "말속도" in final_decision: st.info("💡 특징: 말이 빠르거나 리듬이 불규칙하며, 정서적 불안감이 동반될 수 있습니다.")
+                            else: st.info("💡 특징: 발음이 뭉개지고 정확도가 떨어집니다.")
 
                     else: final_decision = "Parkinson (Subtype Model Error)"
 
-            # [수정됨] 상세 종합 해석 복구
+            # [복구됨] 상세 종합 해석 (Version 1.0 스타일)
             st.divider()
             with st.expander("💡 상세 종합 해석 보기", expanded=True):
                 pos, neg = generate_interpretation(prob_normal, final_db, final_sps, range_adj, p_artic, vhi_total, vhi_e)
@@ -462,14 +437,14 @@ if st.session_state.get('is_analyzed'):
 
 # 전송 버튼
 st.markdown("---")
-if st.button("☁️ 클라우드에 데이터 전송 (Google Drive)", type="primary"):
+if st.button("☁️ 데이터 전송 (메일+시트)", type="primary"):
     if 'save_ready_data' not in st.session_state:
         st.error("🚨 전송할 데이터가 없습니다. 먼저 [🚀 진단 결과 확인]을 눌러주세요!")
     elif st.session_state.get('is_saved'):
         st.warning("이미 전송된 데이터입니다.")
     else:
-        with st.spinner("구글 드라이브 및 시트로 전송 중..."):
-            success, msg = save_to_google_drive(
+        with st.spinner("구글 시트 기록 및 이메일 전송 중..."):
+            success, msg = send_email_and_log_sheet(
                 st.session_state.save_ready_data['wav_path'], 
                 st.session_state.save_ready_data['patient'], 
                 st.session_state.save_ready_data['analysis'], 
@@ -477,7 +452,7 @@ if st.button("☁️ 클라우드에 데이터 전송 (Google Drive)", type="pri
             )
         if success:
             st.session_state.is_saved = True
-            st.success(f"✅ 전송 완료! 파일명: {msg}")
+            st.success(f"✅ 처리 완료! {msg}")
             st.balloons()
         else:
             st.error(f"❌ 전송 실패: {msg}")
