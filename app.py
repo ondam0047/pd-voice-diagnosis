@@ -230,6 +230,39 @@ def run_analysis_logic(file_path):
         st.error(f"분석 오류: {e}")
         return False
 
+# ==========================================
+# [추가 함수] 종합 해석 생성기
+# ==========================================
+def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e):
+    positives = []
+    negatives = []
+
+    # 1. 긍정적 요인 (Normal 확률을 높이는 요소)
+    if vhi < 15:
+        positives.append(f"환자 본인의 주관적 불편함(VHI {vhi}점)이 낮아 일상 대화에 심리적 부담이 적습니다.")
+    if range_val >= 100:
+        positives.append(f"음도 범위({range_val:.1f}Hz)가 넓어 목소리에 생동감이 있고 억양이 자연스럽습니다.")
+    if artic >= 75:
+        positives.append(f"청지각적 조음 정확도({artic}점)가 양호하여 의사소통 명료도가 높습니다.")
+    if sps >= 3.0 and sps <= 5.5:
+        positives.append(f"말속도({sps:.2f} SPS)가 정상 범위에 있어 안정적입니다.")
+    if db >= 60:
+        positives.append(f"성량({db:.1f} dB)이 튼튼하여 정상적인 발성이 유지되고 있습니다.")
+
+    # 2. 부정적/위험 요인 (PD 확률을 남기는 요소)
+    if db < 60:
+        negatives.append(f"성량({db:.1f} dB)이 일반 대화 수준(60dB)보다 작아 파킨슨병의 '강도 감소(Hypophonia)' 특성과 유사합니다.")
+    if sps < 3.0:
+        negatives.append(f"말속도({sps:.2f} SPS)가 다소 느려 발화 운동의 민첩성이 떨어져 보입니다(서동증 의심).")
+    if artic < 70:
+        negatives.append(f"발음의 정확도({artic}점)가 다소 낮아 파킨슨병의 조음 문제(Dysarthria) 징후로 해석될 여지가 있습니다.")
+    if vhi >= 20:
+        negatives.append(f"VHI 점수({vhi}점)가 높아 환자 스스로 음성 문제를 크게 자각하고 있습니다.")
+    if vhi_e >= 5:
+        negatives.append("정서적 스트레스(VHI-E)가 높아 말하기에 대한 불안감이 감지됩니다.")
+
+    return positives, negatives
+
 # --- UI Title ---
 st.title("🧠 파킨슨병(PD) 음성 하위유형 변별 진단 시스템")
 st.markdown("청지각(Perceptual) + 음향(Acoustic) + 자가보고(VHI-10) 통합 하이브리드 진단 모델")
@@ -395,6 +428,7 @@ if st.session_state.get('is_analyzed'):
             # Step 0: Rule-based (규칙 기반)
             if p_artic >= 78 and vhi_total < 12:
                 st.success(f"🟢 **정상 음성 (Normal) (100.0%)**")
+                prob_normal = 100.0
             
             else:
                 # Step 1: 1차 AI 진단
@@ -432,35 +466,29 @@ if st.session_state.get('is_analyzed'):
                         final_decision = pred_subtype
                         warn_msg = []
                         
-                        # [중요 수정] 말속도 집단 재조정 로직 강화
-                        # AI 확률이 낮더라도 객관적 지표(SPS)나 정서 지표(VHI-E)가 명확하면 재조정
-                        
                         is_rate_feature = False
                         
-                        # 정서 점수 가중치
                         emotional_ratio = vhi_e / 8.0 
-                        if emotional_ratio >= 0.55: # 정서 5점 이상
+                        if emotional_ratio >= 0.55: 
                             is_rate_feature = True
                             warn_msg.append("⚠️ **[중요]** 높은 정서적 스트레스(VHI-정서)가 감지되었습니다. 이는 **'말속도 집단'**의 특징입니다.")
                         
-                        # 객관적 말속도 가중치
                         if final_sps >= 4.5:
                              is_rate_feature = True
                              warn_msg.append("⚠️ 객관적 말속도(SPS)가 빠릅니다.")
                         
-                        # 재조정 실행 (이전 코드에서 누락되었던 부분)
                         if is_rate_feature and "말속도" not in final_decision:
                             final_decision = "말속도 집단 (재조정됨)"
                             warn_msg.append("💡 객관적 지표에 따라 진단 결과가 **'말속도 집단'**으로 보정되었습니다.")
 
-                        # 2. 강도 집단 판별 (임계값 60dB)
+                        # 강도 집단 판별
                         MIC_INTENSITY_CUTOFF = 60.0
                         if final_db < MIC_INTENSITY_CUTOFF:
                             if "강도" not in final_decision:
                                 warn_msg.append(f"⚠️ **[중요]** 음성 강도가 {final_db:.1f}dB로 기준보다 낮습니다. **'강도 집단'** 특성이 강합니다.")
                                 final_decision = "강도 집단 (재조정됨)"
 
-                        # 3. 조음 집단 판별
+                        # 조음 집단 판별
                         if vhi_total < 15 and p_artic < 60:
                             if "조음" not in final_decision:
                                 warn_msg.append("⚠️ 주관적 불편함(VHI)은 적으나 청지각적 조음 문제가 있습니다. **'조음 집단'** 가능성이 높습니다.")
@@ -469,7 +497,6 @@ if st.session_state.get('is_analyzed'):
                         st.markdown(f"### 🔍 최종 예측 하위 유형: **[{final_decision}]**")
                         for msg in warn_msg: st.warning(msg)
                         
-                        # 스파이더 차트 (확률 포함)
                         labels = list(model_step2.classes_)
                         labels_with_probs = [f"{label}\n({prob*100:.1f}%)" for label, prob in zip(labels, probs_sub)]
                         
@@ -493,3 +520,32 @@ if st.session_state.get('is_analyzed'):
                                 st.info("💡 **특징:** 말이 빠르거나 리듬이 불규칙하며, 정서적 불안감이 동반될 수 있습니다.")
                             else:
                                 st.info("💡 **특징:** 발음이 뭉개지고 정확도가 떨어집니다.")
+
+            # ----------------------------------------------------------------
+            # [추가됨] 💡 상세 종합 해석 (모든 케이스에 대해 표시)
+            # ----------------------------------------------------------------
+            st.divider()
+            with st.expander("💡 상세 종합 해석 (AI Interpretation) 보기", expanded=True):
+                positives, negatives = generate_interpretation(prob_normal, final_db, final_sps, range_adj, p_artic, vhi_total, vhi_e)
+                
+                st.markdown(f"**1. 정상(Normal) 확률이 {prob_normal:.1f}%로 나타난 이유 (긍정적 요인):**")
+                if positives:
+                    for p in positives:
+                        st.markdown(f"- ✅ {p}")
+                else:
+                    st.markdown("- 특별한 긍정적 요인이 감지되지 않았습니다.")
+
+                st.markdown(f"**2. 파킨슨(PD) 가능성이 {100-prob_normal:.1f}% 존재하는 이유 (위험 요인):**")
+                if negatives:
+                    for n in negatives:
+                        st.markdown(f"- ⚠️ {n}")
+                else:
+                    st.markdown("- 특별한 위험 요인이 감지되지 않았습니다.")
+                
+                # 종합 결론
+                if prob_normal >= 70:
+                    st.info("📋 **결론:** 전반적으로 양호한 상태이나, 위에서 언급된 일부 '위험 요인'(특히 강도나 조음)에 대해서는 지속적인 관찰이나 가벼운 훈련이 권장됩니다.")
+                elif prob_normal >= 40:
+                    st.warning("📋 **결론:** 정상과 파킨슨 특성이 혼재되어 있습니다. 특히 경고가 뜬 항목(강도, 속도 등)에 대해 정밀 검사가 필요합니다.")
+                else:
+                    st.error("📋 **결론:** 파킨슨병의 음성학적 특징이 뚜렷하게 관찰됩니다. 전문의와의 상담 및 음성 치료가 적극 권장됩니다.")
