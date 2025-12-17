@@ -48,6 +48,7 @@ def setup_korean_font():
     elif system_name == 'Darwin': 
         plt.rc('font', family='AppleGothic')
     else: 
+        # 리눅스(Streamlit Cloud) 환경 폰트 처리
         plt.rc('font', family='NanumGothic')
     plt.rcParams['axes.unicode_minus'] = False
 
@@ -314,7 +315,7 @@ if st.session_state.get('is_analyzed'):
         st.markdown("#### 📝 VHI-10")
         vhi_opts = [0, 1, 2, 3, 4]
         
-        # [수정] 구분(F,P,E) 텍스트 삭제, 1~10번 문항만 나열
+        # [수정] 1~10번 문항만 깔끔하게 나열
         with st.expander("VHI-10 문항 입력 (클릭해서 펼치기)", expanded=True):
             q1 = st.select_slider("1. 사람들이 내 목소리를 듣는데 어려움을 느낀다.", options=vhi_opts)
             q2 = st.select_slider("2. 사람들이 내 말을 잘 못 알아들어 반복해야 한다.", options=vhi_opts)
@@ -327,7 +328,6 @@ if st.session_state.get('is_analyzed'):
             q9 = st.select_slider("9. 내 목소리 때문에 소외감을 느낀다.", options=vhi_opts)
             q10 = st.select_slider("10. 목소리를 내는 것이 힘들다.", options=vhi_opts)
 
-        # 내부 로직용 점수 계산 (화면엔 안 보임)
         vhi_f = q1 + q2 + q5 + q7 + q8
         vhi_p = q3 + q4 + q6
         vhi_e = q9 + q10
@@ -354,21 +354,58 @@ if st.session_state.get('is_analyzed'):
                     if model_step2:
                         input_2 = pd.DataFrame([[st.session_state['f0_mean'], range_adj, final_db, final_sps, vhi_total, vhi_p, vhi_f, vhi_e, p_pitch, p_prange, p_loud, p_rate, p_artic]], columns=FEATS_STEP2)
                         final_decision = model_step2.predict(input_2)[0]
+                        probs_sub = model_step2.predict_proba(input_2)[0]
                         
+                        # [Version 1.0 로직 복구]
+                        warn_msg = []
                         is_rate_feature = False
                         if vhi_e/8.0 >= 0.55: is_rate_feature = True
-                        if final_sps >= 4.5: is_rate_feature = True 
+                        if final_sps >= 4.5: 
+                            is_rate_feature = True 
+                            warn_msg.append("⚠️ 객관적 말속도(SPS)가 빠릅니다.")
                         
-                        if is_rate_feature and "말속도" not in final_decision: final_decision = "말속도 집단 (재조정됨)"
-                        if final_db < 60.0 and "강도" not in final_decision: final_decision = "강도 집단 (재조정됨)"
-                        if vhi_total < 15 and p_artic < 60 and "조음" not in final_decision: final_decision = "조음 집단 (재조정됨)"
+                        if is_rate_feature and "말속도" not in final_decision: 
+                            final_decision = "말속도 집단 (재조정됨)"
+                            warn_msg.append("💡 객관적 지표에 따라 진단 결과가 **'말속도 집단'**으로 보정되었습니다.")
+
+                        if final_db < 60.0 and "강도" not in final_decision: 
+                            final_decision = "강도 집단 (재조정됨)"
+                            warn_msg.append(f"⚠️ **[중요]** 음성 강도가 {final_db:.1f}dB로 기준보다 낮습니다.")
+
+                        if vhi_total < 15 and p_artic < 60 and "조음" not in final_decision: 
+                            final_decision = "조음 집단 (재조정됨)"
+                            warn_msg.append("⚠️ 주관적 불편함(VHI)은 적으나 청지각적 조음 문제가 있습니다.")
                         
-                        st.error(f"🔴 **파킨슨 특성 감지:** {final_decision}")
+                        st.markdown(f"### 🔍 최종 예측 하위 유형: **[{final_decision}]**")
+                        for msg in warn_msg: st.warning(msg)
+
+                        # [Version 1.0] 스파이더 차트 복구
+                        labels = list(model_step2.classes_)
+                        labels_with_probs = [f"{label}\n({prob*100:.1f}%)" for label, prob in zip(labels, probs_sub)]
+                        fig_radar = plt.figure(figsize=(4, 4))
+                        ax = fig_radar.add_subplot(111, polar=True)
+                        angles = np.linspace(0, 2 * np.pi, len(labels), endpoint=False).tolist()
+                        angles += angles[:1]
+                        stats = probs_sub.tolist() + [probs_sub[0]]
+                        ax.plot(angles, stats, linewidth=2, linestyle='solid', color='red')
+                        ax.fill(angles, stats, 'red', alpha=0.25)
+                        ax.set_xticks(angles[:-1])
+                        ax.set_xticklabels(labels_with_probs)
+                        
+                        c_chart, c_desc = st.columns([1, 2])
+                        with c_chart: st.pyplot(fig_radar)
+                        with c_desc:
+                            if "강도" in final_decision: st.info("💡 **특징:** 목소리 크기가 작고 약합니다. (Hypophonia)")
+                            elif "말속도" in final_decision: st.info("💡 **특징:** 말이 빠르거나 리듬이 불규칙하며, 정서적 불안감이 동반될 수 있습니다.")
+                            else: st.info("💡 **특징:** 발음이 뭉개지고 정확도가 떨어집니다.")
                     else: final_decision = "Parkinson (Subtype Model Error)"
 
-            pos, neg = generate_interpretation(prob_normal, final_db, final_sps, range_adj, p_artic, vhi_total, vhi_e)
-            if pos: st.info(f"✅ 긍정: {', '.join([p.split('(')[0] for p in pos])}")
-            if neg: st.warning(f"⚠️ 위험: {', '.join([n.split('(')[0] for n in neg])}")
+            # 상세 해석
+            st.divider()
+            with st.expander("💡 상세 종합 해석 (AI Interpretation) 보기", expanded=True):
+                pos, neg = generate_interpretation(prob_normal, final_db, final_sps, range_adj, p_artic, vhi_total, vhi_e)
+                if pos: st.info(f"✅ 긍정: {', '.join([p.split('(')[0] for p in pos])}")
+                if neg: st.warning(f"⚠️ 위험: {', '.join([n.split('(')[0] for n in neg])}")
 
             st.session_state.save_ready_data = {
                 'wav_path': st.session_state.current_wav_path,
