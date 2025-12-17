@@ -231,7 +231,7 @@ def run_analysis_logic(file_path):
         return False
 
 # ==========================================
-# [추가 함수] 종합 해석 생성기
+# [수정된 함수] 종합 해석 생성기
 # ==========================================
 def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e):
     positives = []
@@ -244,16 +244,22 @@ def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e):
         positives.append(f"음도 범위({range_val:.1f}Hz)가 넓어 목소리에 생동감이 있고 억양이 자연스럽습니다.")
     if artic >= 75:
         positives.append(f"청지각적 조음 정확도({artic}점)가 양호하여 의사소통 명료도가 높습니다.")
-    if sps >= 3.0 and sps <= 5.5:
-        positives.append(f"말속도({sps:.2f} SPS)가 정상 범위에 있어 안정적입니다.")
+    
+    # [수정] 말속도가 4.5 미만이면(느리더라도) '긍정적/안정적'으로 평가
+    if sps < 4.5:
+        positives.append(f"말속도({sps:.2f} SPS)가 급격히 빨라지는 가속 현상 없이 안정적으로 유지되고 있습니다.")
+        
     if db >= 60:
         positives.append(f"성량({db:.1f} dB)이 튼튼하여 정상적인 발성이 유지되고 있습니다.")
 
     # 2. 부정적/위험 요인 (PD 확률을 남기는 요소)
     if db < 60:
         negatives.append(f"성량({db:.1f} dB)이 일반 대화 수준(60dB)보다 작아 파킨슨병의 '강도 감소(Hypophonia)' 특성과 유사합니다.")
-    if sps < 3.0:
-        negatives.append(f"말속도({sps:.2f} SPS)가 다소 느려 발화 운동의 민첩성이 떨어져 보입니다(서동증 의심).")
+    
+    # [수정] 말속도가 3.0 미만이어도 문제 삼지 않음 (삭제됨). 4.5 이상일 때만 경고.
+    if sps >= 4.5:
+        negatives.append(f"말속도({sps:.2f} SPS)가 지나치게 빨라 가속보행(Festination)과 유사한 말속도 가속 징후가 의심됩니다.")
+        
     if artic < 70:
         negatives.append(f"발음의 정확도({artic}점)가 다소 낮아 파킨슨병의 조음 문제(Dysarthria) 징후로 해석될 여지가 있습니다.")
     if vhi >= 20:
@@ -429,6 +435,10 @@ if st.session_state.get('is_analyzed'):
             if p_artic >= 78 and vhi_total < 12:
                 st.success(f"🟢 **정상 음성 (Normal) (100.0%)**")
                 prob_normal = 100.0
+                
+                final_decision = "Normal"
+                final_db = st.session_state['mean_db'] + db_adj
+                final_sps = st.session_state.user_syllables / sel_dur
             
             else:
                 # Step 1: 1차 AI 진단
@@ -446,6 +456,7 @@ if st.session_state.get('is_analyzed'):
 
                 if pred_1 == 'Normal':
                     st.success(f"🟢 **정상 음성 (Normal) ({prob_normal:.1f}%)**")
+                    final_decision = "Normal"
                 
                 else:
                     # Step 2: 2차 AI 진단
@@ -473,6 +484,7 @@ if st.session_state.get('is_analyzed'):
                             is_rate_feature = True
                             warn_msg.append("⚠️ **[중요]** 높은 정서적 스트레스(VHI-정서)가 감지되었습니다. 이는 **'말속도 집단'**의 특징입니다.")
                         
+                        # [수정] 객관적 말속도가 빠를 때만 경고
                         if final_sps >= 4.5:
                              is_rate_feature = True
                              warn_msg.append("⚠️ 객관적 말속도(SPS)가 빠릅니다.")
@@ -521,9 +533,7 @@ if st.session_state.get('is_analyzed'):
                             else:
                                 st.info("💡 **특징:** 발음이 뭉개지고 정확도가 떨어집니다.")
 
-            # ----------------------------------------------------------------
-            # [추가됨] 💡 상세 종합 해석 (모든 케이스에 대해 표시)
-            # ----------------------------------------------------------------
+            # 💡 상세 종합 해석
             st.divider()
             with st.expander("💡 상세 종합 해석 (AI Interpretation) 보기", expanded=True):
                 positives, negatives = generate_interpretation(prob_normal, final_db, final_sps, range_adj, p_artic, vhi_total, vhi_e)
