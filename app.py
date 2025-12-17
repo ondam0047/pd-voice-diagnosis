@@ -24,7 +24,7 @@ from sklearn.ensemble import RandomForestClassifier
 from scipy.signal import find_peaks
 
 # --- 페이지 기본 설정 ---
-st.set_page_config(page_title="PD 음성 데이터 수집 시스템 (V2.1)", layout="wide")
+st.set_page_config(page_title="PD 음성 데이터 수집 시스템 (V2.2)", layout="wide")
 
 # ==========================================
 # [설정] 구글 시트 정보 (Secrets에서 로드)
@@ -127,14 +127,17 @@ try: model_step1, model_step2 = train_models()
 except: model_step1, model_step2 = None, None
 
 # ==========================================
-# [수정됨] 이메일 전송 + 시트 저장 함수
+# [수정됨] 403 에러 해결 (Scopes 확장)
 # ==========================================
 def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
     try:
-        # 1. 구글 스프레드시트 기록 (이건 무료라 무조건 성공)
+        # [수정] Scope에 'drive' 추가하여 권한 문제 해결
         creds = service_account.Credentials.from_service_account_info(
             st.secrets["gcp_service_account"],
-            scopes=['https://www.googleapis.com/auth/spreadsheets']
+            scopes=[
+                'https://www.googleapis.com/auth/spreadsheets',
+                'https://www.googleapis.com/auth/drive'
+            ]
         )
         gc = gspread.authorize(creds)
         sh = gc.open(SHEET_NAME)
@@ -163,7 +166,7 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         ]
         worksheet.append_row(row_data)
 
-        # 2. 이메일로 파일 전송 (Drive 용량 문제 해결)
+        # 이메일 전송
         sender = st.secrets["email"]["sender"]
         password = st.secrets["email"]["password"]
         receiver = st.secrets["email"]["receiver"]
@@ -254,7 +257,7 @@ def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e):
 
 # --- UI Title ---
 st.title("📂 파킨슨 환자 교육 및 음성 데이터 수집 시스템")
-st.markdown("Version 2.1 (Email Backup Edition)")
+st.markdown("Version 2.2 (Fix Scopes & VHI)")
 
 # 1. 사이드바
 with st.sidebar:
@@ -313,7 +316,6 @@ if st.session_state.get('is_analyzed'):
         sel_dur = max(0.1, e_time - s_time)
         final_sps = st.session_state.user_syllables / sel_dur
         
-        # [복구됨] 음향 결과치 표
         st.write("#### 📊 음향학적 분석 결과")
         result_df = pd.DataFrame({
             "항목": ["평균 강도(dB)", "평균 음도(Hz)", "음도 범위(Hz)", "말속도(SPS)"],
@@ -330,13 +332,11 @@ if st.session_state.get('is_analyzed'):
         p_pitch = st.slider("음도", 0, 100, 50)
         p_prange = st.slider("음도 범위", 0, 100, 50)
         p_loud = st.slider("강도", 0, 100, 50)
-        # [수정됨] '말속도(청지각)' -> '말속도'
         p_rate = st.slider("말속도", 0, 100, 50)
     with cc2:
         st.markdown("#### 📝 VHI-10")
         vhi_opts = [0, 1, 2, 3, 4]
         
-        # 문항 1~10 나열 (구분 텍스트 제거)
         with st.expander("VHI-10 문항 입력 (클릭해서 펼치기)", expanded=True):
             q1 = st.select_slider("1. 사람들이 내 목소리를 듣는데 어려움을 느낀다.", options=vhi_opts)
             q2 = st.select_slider("2. 사람들이 내 말을 잘 못 알아들어 반복해야 한다.", options=vhi_opts)
@@ -353,7 +353,14 @@ if st.session_state.get('is_analyzed'):
         vhi_p = q3 + q4 + q6
         vhi_e = q9 + q10
         vhi_total = vhi_f + vhi_p + vhi_e
-        st.metric("VHI 총점", f"{vhi_total}점")
+        
+        # [수정됨] VHI 점수 4가지 모두 표시
+        st.markdown("##### 📊 영역별 점수")
+        col_v1, col_v2, col_v3, col_v4 = st.columns(4)
+        col_v1.metric("총점", f"{vhi_total}점")
+        col_v2.metric("기능(F)", f"{vhi_f}점")
+        col_v3.metric("신체(P)", f"{vhi_p}점")
+        col_v4.metric("정서(E)", f"{vhi_e}점")
 
     st.markdown("---")
     st.subheader("4. 최종 진단 및 클라우드 전송")
@@ -387,10 +394,9 @@ if st.session_state.get('is_analyzed'):
                         
                         st.error(f"🔴 **파킨슨 특성 감지:** {final_decision}")
                         
-                        # [수정됨] 스파이더 차트 복구 (사이즈 3,3 적용)
                         labels = list(model_step2.classes_)
                         labels_with_probs = [f"{label}\n({prob*100:.1f}%)" for label, prob in zip(labels, probs_sub)]
-                        fig_radar = plt.figure(figsize=(3, 3)) # 사이즈 수정됨
+                        fig_radar = plt.figure(figsize=(3, 3))
                         ax = fig_radar.add_subplot(111, polar=True)
                         angles = np.linspace(0, 2 * np.pi, len(labels), endpoint=False).tolist()
                         angles += angles[:1]
@@ -409,7 +415,6 @@ if st.session_state.get('is_analyzed'):
 
                     else: final_decision = "Parkinson (Subtype Model Error)"
 
-            # [복구됨] 상세 종합 해석 (Version 1.0 스타일)
             st.divider()
             with st.expander("💡 상세 종합 해석 보기", expanded=True):
                 pos, neg = generate_interpretation(prob_normal, final_db, final_sps, range_adj, p_artic, vhi_total, vhi_e)
