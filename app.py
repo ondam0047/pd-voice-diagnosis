@@ -24,7 +24,7 @@ from sklearn.ensemble import RandomForestClassifier
 from scipy.signal import find_peaks
 
 # --- 페이지 기본 설정 ---
-st.set_page_config(page_title="PD 음성 데이터 수집 시스템 (V2.2)", layout="wide")
+st.set_page_config(page_title="PD 음성 데이터 수집 시스템 (V2.3)", layout="wide")
 
 # ==========================================
 # [설정] 구글 시트 정보 (Secrets에서 로드)
@@ -127,17 +127,14 @@ try: model_step1, model_step2 = train_models()
 except: model_step1, model_step2 = None, None
 
 # ==========================================
-# [수정됨] 403 에러 해결 (Scopes 확장)
+# [수정됨] 이메일 전송 함수 (WAV 포맷 명시)
 # ==========================================
 def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
     try:
-        # [수정] Scope에 'drive' 추가하여 권한 문제 해결
+        # 1. 구글 스프레드시트 기록
         creds = service_account.Credentials.from_service_account_info(
             st.secrets["gcp_service_account"],
-            scopes=[
-                'https://www.googleapis.com/auth/spreadsheets',
-                'https://www.googleapis.com/auth/drive'
-            ]
+            scopes=['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
         )
         gc = gspread.authorize(creds)
         sh = gc.open(SHEET_NAME)
@@ -166,7 +163,7 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         ]
         worksheet.append_row(row_data)
 
-        # 이메일 전송
+        # 2. 이메일 전송 (WAV 파일 포맷 설정)
         sender = st.secrets["email"]["sender"]
         password = st.secrets["email"]["password"]
         receiver = st.secrets["email"]["receiver"]
@@ -180,16 +177,18 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         환자: {patient_info['name']} ({patient_info['age']}/{patient_info['gender']})
         진단: {diagnosis['final']} ({diagnosis['normal_prob']:.1f}%)
         
-        * 음성 파일이 첨부되었습니다.
+        * 음성 파일(.wav)이 첨부되었습니다.
         * 상세 수치는 구글 시트에 저장되었습니다.
         """
         msg.attach(MIMEText(body, 'plain'))
 
         with open(wav_path, "rb") as f:
-            part = MIMEBase("application", "octet-stream")
+            # [수정] MIME 타입을 audio/wav로 명시
+            part = MIMEBase("audio", "wav")
             part.set_payload(f.read())
+        
         encoders.encode_base64(part)
-        part.add_header("Content-Disposition", f"attachment; filename= {filename}")
+        part.add_header("Content-Disposition", f"attachment; filename={filename}")
         msg.attach(part)
 
         server = smtplib.SMTP('smtp.gmail.com', 587)
@@ -204,7 +203,36 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         return False, str(e)
 
 # ==========================================
-# [분석 로직] Version 1.0 (가속만 위험)
+# [복구됨] SMR 측정 함수 (Version 1.0)
+# ==========================================
+def auto_detect_smr_events(sound_path, top_n=10):
+    try:
+        sound = parselmouth.Sound(sound_path)
+        intensity = sound.to_intensity(time_step=0.005)
+        times = intensity.xs()
+        values = intensity.values[0, :]
+        
+        # 반전시켜서 Peak 찾기 (SMR 방식)
+        inv_vals = -values
+        peaks, properties = find_peaks(inv_vals, prominence=5, distance=40)
+        
+        candidates = []
+        for p_idx in peaks:
+            time_point = times[p_idx]
+            v_int = values[p_idx]
+            start_search = max(0, p_idx - 20)
+            end_search = min(len(values), p_idx + 20)
+            local_max = np.max(values[start_search:end_search])
+            depth = local_max - v_int
+            candidates.append({"time": time_point, "depth": depth})
+            
+        candidates.sort(key=lambda x: x['time'])
+        return candidates[:top_n], len(candidates)
+    except:
+        return [], 0
+
+# ==========================================
+# [분석 로직] Version 1.0
 # ==========================================
 def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
     try:
@@ -231,9 +259,13 @@ def run_analysis_logic(file_path):
         mean_db = call(intensity, "Get mean", 0, 0, "energy")
         sps = st.session_state.user_syllables / dur if dur > 0 else 0
         
+        # [복구] SMR 이벤트 감지 호출
+        smr_events, smr_count = auto_detect_smr_events(file_path)
+        
         st.session_state.update({
             'f0_mean': f0, 'pitch_range': rng, 'mean_db': mean_db, 
             'sps': sps, 'duration': dur, 'fig_plotly': fig, 
+            'smr_events': smr_events, 'smr_count': smr_count, # SMR 저장
             'is_analyzed': True, 'is_saved': False
         })
         return True
@@ -257,7 +289,7 @@ def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e):
 
 # --- UI Title ---
 st.title("📂 파킨슨 환자 교육 및 음성 데이터 수집 시스템")
-st.markdown("Version 2.2 (Fix Scopes & VHI)")
+st.markdown("Version 2.3 (Full Features Restore)")
 
 # 1. 사이드바
 with st.sidebar:
@@ -277,10 +309,21 @@ TEMP_FILENAME = "temp_for_analysis.wav"
 with col_rec:
     st.markdown("#### 🎙️ 마이크 녹음")
     font_size = st.slider("🔍 글자 크기", 15, 50, 28, key="fs_read")
+    
+    # [수정됨] 문단 선택 기능 (산책 vs 바닷가)
+    read_opt = st.radio("📖 낭독 문단 선택", ["산책 (기본)", "바닷가의 추억 (80음절)"])
+    
+    if "바닷가" in read_opt:
+        read_text = "바닷가에 나가 조개를 주으며 넓게 펼쳐있는 바다를 바라보면 내 마음 역시 넓어지는 것 같다."
+        default_syl = 80
+    else:
+        read_text = "높은 산에 올라가 맑은 공기를 마시며 소리를 지르면 가슴이 활짝 열리는 듯하다."
+        default_syl = 60
+        
     def styled_text(text, size): return f"""<div style="font-size: {size}px; line-height: 1.8; border: 1px solid #ddd; padding: 15px; background-color: #f9f9f9; color: #333;">{text}</div>"""
-    with st.expander("📖 [1] 산책 문단", expanded=True):
-        st.markdown(styled_text("높은 산에 올라가 맑은 공기를 마시며 소리를 지르면 가슴이 활짝 열리는 듯하다. 바닷가에 나가 조개를 주으며 넓게 펼쳐있는 바다를 바라보면 내 마음 역시 넓어지는 것 같다.", font_size), unsafe_allow_html=True)
-    syllables_rec = st.number_input("전체 음절 수", 1, 500, 80, key="syl_rec")
+    st.markdown(styled_text(read_text, font_size), unsafe_allow_html=True)
+    
+    syllables_rec = st.number_input("전체 음절 수", 1, 500, default_syl, key="syl_rec")
     st.session_state.user_syllables = syllables_rec
     
     audio_buf = st.audio_input("낭독 녹음")
@@ -354,7 +397,6 @@ if st.session_state.get('is_analyzed'):
         vhi_e = q9 + q10
         vhi_total = vhi_f + vhi_p + vhi_e
         
-        # [수정됨] VHI 점수 4가지 모두 표시
         st.markdown("##### 📊 영역별 점수")
         col_v1, col_v2, col_v3, col_v4 = st.columns(4)
         col_v1.metric("총점", f"{vhi_total}점")
@@ -458,6 +500,6 @@ if st.button("☁️ 데이터 전송 (메일+시트)", type="primary"):
         if success:
             st.session_state.is_saved = True
             st.success(f"✅ 처리 완료! {msg}")
-            st.balloons()
+            # [수정됨] 풍선 효과 삭제
         else:
             st.error(f"❌ 전송 실패: {msg}")
