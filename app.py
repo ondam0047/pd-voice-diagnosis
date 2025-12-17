@@ -188,7 +188,7 @@ def save_to_google_drive(wav_source_path, patient_info, analysis_results, diagno
         return False, str(e)
 
 # ==========================================
-# [분석 로직] Version 1.0 (가속만 위험)
+# [분석 로직] Version 1.0
 # ==========================================
 def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
     try:
@@ -226,14 +226,12 @@ def run_analysis_logic(file_path):
 
 def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e):
     positives, negatives = [], []
-    # 1. 긍정적 요인 (말속도가 4.5 미만이면 안정적으로 평가)
     if vhi < 15: positives.append(f"환자 본인의 주관적 불편함(VHI {vhi}점)이 낮아 심리적 부담이 적습니다.")
     if range_val >= 100: positives.append(f"음도 범위({range_val:.1f}Hz)가 넓어 억양이 자연스럽습니다.")
     if artic >= 75: positives.append(f"청지각적 조음 정확도({artic}점)가 양호합니다.")
     if sps < 4.5: positives.append(f"말속도({sps:.2f} SPS)가 급격한 가속 현상 없이 안정적입니다.")
     if db >= 60: positives.append(f"성량({db:.1f} dB)이 튼튼합니다.")
 
-    # 2. 부정적 요인 (말속도는 4.5 이상일 때만 경고)
     if db < 60: negatives.append(f"성량({db:.1f} dB)이 작아 '강도 감소(Hypophonia)'가 의심됩니다.")
     if sps >= 4.5: negatives.append(f"말속도({sps:.2f} SPS)가 지나치게 빨라 '가속보행(Festination)' 유사 징후가 의심됩니다.")
     if artic < 70: negatives.append(f"발음 정확도({artic}점)가 다소 낮아 조음 문제가 의심됩니다.")
@@ -314,13 +312,33 @@ if st.session_state.get('is_analyzed'):
         p_loud = st.slider("강도", 0, 100, 50)
         p_rate = st.slider("말속도 (청지각)", 0, 100, 50)
     with cc2:
-        st.markdown("#### 📝 VHI-10")
+        st.markdown("#### 📝 VHI-10 (자가보고)")
+        st.caption("0: 전혀, 1: 거의X, 2: 가끔, 3: 자주, 4: 항상")
         vhi_opts = [0, 1, 2, 3, 4]
-        with st.expander("문항 입력", expanded=False):
-            q1, q2, q5, q7, q8 = [st.select_slider(f"기능 {i}", options=vhi_opts) for i in range(5)]
-            q3, q4, q6 = [st.select_slider(f"신체 {i}", options=vhi_opts) for i in range(3)]
-            q9, q10 = [st.select_slider(f"정서 {i}", options=vhi_opts) for i in range(2)]
-        vhi_f, vhi_p, vhi_e = sum([q1,q2,q5,q7,q8]), sum([q3,q4,q6]), sum([q9,q10])
+        
+        # [수정된 부분] VHI 문항 10개 완벽 복구
+        with st.expander("VHI-10 문항 입력 (클릭해서 펼치기)", expanded=True):
+            st.markdown("**기능(Functional)**")
+            q1 = st.select_slider("1. 사람들이 내 목소리를 듣는데 어려움을 느낀다.", options=vhi_opts)
+            q2 = st.select_slider("2. 사람들이 내 말을 잘 못 알아들어 반복해야 한다.", options=vhi_opts)
+            q5 = st.select_slider("5. 목소리 문제로 인해 사람들을 피하게 된다.", options=vhi_opts)
+            q7 = st.select_slider("7. 목소리 문제로 수입에 지장이 있다.", options=vhi_opts)
+            q8 = st.select_slider("8. 내 목소리 문제로 대화가 제한된다.", options=vhi_opts)
+            
+            st.divider()
+            st.markdown("**신체(Physical)**")
+            q3 = st.select_slider("3. 낯선 사람들과 전화로 대화하는 것이 어렵다.", options=vhi_opts)
+            q4 = st.select_slider("4. 목소리 문제로 인해 긴장된다.", options=vhi_opts)
+            q6 = st.select_slider("6. 내 목소리 때문에 짜증이 난다.", options=vhi_opts)
+
+            st.divider()
+            st.markdown("**정서(Emotional)**")
+            q9 = st.select_slider("9. 내 목소리 때문에 소외감을 느낀다.", options=vhi_opts)
+            q10 = st.select_slider("10. 목소리를 내는 것이 힘들다.", options=vhi_opts)
+
+        vhi_f = q1 + q2 + q5 + q7 + q8
+        vhi_p = q3 + q4 + q6
+        vhi_e = q9 + q10
         vhi_total = vhi_f + vhi_p + vhi_e
         st.metric("VHI 총점", f"{vhi_total}점")
 
@@ -329,7 +347,6 @@ if st.session_state.get('is_analyzed'):
     
     if st.button("🚀 진단 결과 확인", key="btn_diag"):
         if model_step1:
-            # 진단 로직 (Version 1.0)
             if p_artic >= 78 and vhi_total < 12:
                 prob_normal, final_decision = 100.0, "Normal"
                 st.success(f"🟢 **정상 음성 (Normal) (100.0%)**")
@@ -346,7 +363,6 @@ if st.session_state.get('is_analyzed'):
                         input_2 = pd.DataFrame([[st.session_state['f0_mean'], range_adj, final_db, final_sps, vhi_total, vhi_p, vhi_f, vhi_e, p_pitch, p_prange, p_loud, p_rate, p_artic]], columns=FEATS_STEP2)
                         final_decision = model_step2.predict(input_2)[0]
                         
-                        # [Version 1.0 보정]
                         is_rate_feature = False
                         if vhi_e/8.0 >= 0.55: is_rate_feature = True
                         if final_sps >= 4.5: is_rate_feature = True 
@@ -374,9 +390,7 @@ if st.session_state.get('is_analyzed'):
             }
         else: st.error("모델 로드 실패")
 
-# ==========================================
-# [수정] 전송 버튼 항상 표시
-# ==========================================
+# 전송 버튼 상시 표시
 st.markdown("---")
 if st.button("☁️ 클라우드에 데이터 전송 (Google Drive)", type="primary"):
     if 'save_ready_data' not in st.session_state:
