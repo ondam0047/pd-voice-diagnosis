@@ -48,7 +48,6 @@ def setup_korean_font():
     elif system_name == 'Darwin': 
         plt.rc('font', family='AppleGothic')
     else: 
-        # 리눅스(Streamlit Cloud) 환경 폰트 처리
         plt.rc('font', family='NanumGothic')
     plt.rcParams['axes.unicode_minus'] = False
 
@@ -188,7 +187,7 @@ def save_to_google_drive(wav_source_path, patient_info, analysis_results, diagno
         return False, str(e)
 
 # ==========================================
-# [분석 로직] Version 1.0
+# [분석 로직] Version 1.0 (가속만 위험)
 # ==========================================
 def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
     try:
@@ -312,30 +311,23 @@ if st.session_state.get('is_analyzed'):
         p_loud = st.slider("강도", 0, 100, 50)
         p_rate = st.slider("말속도 (청지각)", 0, 100, 50)
     with cc2:
-        st.markdown("#### 📝 VHI-10 (자가보고)")
-        st.caption("0: 전혀, 1: 거의X, 2: 가끔, 3: 자주, 4: 항상")
+        st.markdown("#### 📝 VHI-10")
         vhi_opts = [0, 1, 2, 3, 4]
         
-        # [수정된 부분] VHI 문항 10개 완벽 복구
+        # [수정] 구분(F,P,E) 텍스트 삭제, 1~10번 문항만 나열
         with st.expander("VHI-10 문항 입력 (클릭해서 펼치기)", expanded=True):
-            st.markdown("**기능(Functional)**")
             q1 = st.select_slider("1. 사람들이 내 목소리를 듣는데 어려움을 느낀다.", options=vhi_opts)
             q2 = st.select_slider("2. 사람들이 내 말을 잘 못 알아들어 반복해야 한다.", options=vhi_opts)
-            q5 = st.select_slider("5. 목소리 문제로 인해 사람들을 피하게 된다.", options=vhi_opts)
-            q7 = st.select_slider("7. 목소리 문제로 수입에 지장이 있다.", options=vhi_opts)
-            q8 = st.select_slider("8. 내 목소리 문제로 대화가 제한된다.", options=vhi_opts)
-            
-            st.divider()
-            st.markdown("**신체(Physical)**")
             q3 = st.select_slider("3. 낯선 사람들과 전화로 대화하는 것이 어렵다.", options=vhi_opts)
             q4 = st.select_slider("4. 목소리 문제로 인해 긴장된다.", options=vhi_opts)
+            q5 = st.select_slider("5. 목소리 문제로 인해 사람들을 피하게 된다.", options=vhi_opts)
             q6 = st.select_slider("6. 내 목소리 때문에 짜증이 난다.", options=vhi_opts)
-
-            st.divider()
-            st.markdown("**정서(Emotional)**")
+            q7 = st.select_slider("7. 목소리 문제로 수입에 지장이 있다.", options=vhi_opts)
+            q8 = st.select_slider("8. 내 목소리 문제로 대화가 제한된다.", options=vhi_opts)
             q9 = st.select_slider("9. 내 목소리 때문에 소외감을 느낀다.", options=vhi_opts)
             q10 = st.select_slider("10. 목소리를 내는 것이 힘들다.", options=vhi_opts)
 
+        # 내부 로직용 점수 계산 (화면엔 안 보임)
         vhi_f = q1 + q2 + q5 + q7 + q8
         vhi_p = q3 + q4 + q6
         vhi_e = q9 + q10
