@@ -227,46 +227,45 @@ def auto_detect_smr_events(sound_path, top_n=20):
         return [], 0
 
 # ==========================================
-# [분석 로직] Median Ratio 필터로 확실한 옥타브 제거
+# [분석 로직] Median Ratio + Range (해결된 버전)
 # ==========================================
 def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
     try:
         sound = parselmouth.Sound(sound_path)
         pitch = call(sound, "To Pitch", 0.0, f0_min, f0_max)
-        pitch_vals = np.array(pitch.selected_array['frequency'], dtype=np.float64)
+        pitch_array = pitch.selected_array['frequency']
+        pitch_values = np.array(pitch_array, dtype=np.float64)
         duration = sound.get_total_duration()
-        times = np.linspace(0, duration, len(pitch_vals))
+        n_points = len(pitch_values)
+        time_array = np.linspace(0, duration, n_points)
         
-        # 1. 0(무성음) 제외
-        valid_mask = pitch_vals > 0
-        valid_p = pitch_vals[valid_mask]
-        valid_t = times[valid_mask]
-        
-        clean_p = []
-        clean_t = []
-        mean_f0 = 0
-        rng = 0
+        valid_indices = pitch_values != 0
+        valid_times = time_array[valid_indices]
+        valid_pitch = pitch_values[valid_indices]
 
-        # 2. [핵심] 중앙값 대비 비율 필터 (Octave Jump 제거)
-        # 중앙값의 0.6배 ~ 1.6배 사이만 유효한 음성으로 간주
-        if len(valid_p) > 0:
-            median_f0 = np.median(valid_p)
+        if len(valid_pitch) > 0:
+            median_f0 = np.median(valid_pitch)
+            # Octave Jump 제거용 Ratio 필터
             lower_bound = median_f0 * 0.6
             upper_bound = median_f0 * 1.6
             
-            clean_mask = (valid_p >= lower_bound) & (valid_p <= upper_bound)
-            clean_p = valid_p[clean_mask]
-            clean_t = valid_t[clean_mask]
+            clean_mask = (valid_pitch >= lower_bound) & (valid_pitch <= upper_bound)
+            clean_p = valid_pitch[clean_mask]
+            clean_t = valid_times[clean_mask]
             
             if len(clean_p) > 0:
                 mean_f0 = np.mean(clean_p)
                 rng = np.max(clean_p) - np.min(clean_p)
-        
+            else:
+                mean_f0, rng = 0, 0
+                clean_p, clean_t = [], []
+        else:
+            clean_p, clean_t = [], []
+            mean_f0, rng = 0, 0
+
         fig = go.Figure()
-        
         if len(clean_p) > 0:
             fig.add_trace(go.Scatter(x=clean_t, y=clean_p, mode='markers', marker=dict(size=4, color='red'), name='Pitch'))
-            # 그래프 Y축 자동 조정
             y_min = max(0, np.min(clean_p) - 20)
             y_max = np.max(clean_p) + 20
             fig.update_layout(title="음도 컨투어 (이상치 제거됨)", xaxis_title="Time(s)", yaxis_title="Hz", height=300, yaxis=dict(range=[y_min, y_max]))
@@ -278,11 +277,10 @@ def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
 
 def run_analysis_logic(file_path):
     try:
-        # [설정] 분석 범위는 넓게(500) 잡고, 내부에서 Median Ratio로 정제
         fig, f0, rng, dur = plot_pitch_contour_plotly(file_path, 70, 500)
         sound = parselmouth.Sound(file_path)
         intensity = sound.to_intensity()
-        mean_db = call(intensity, "Get mean", 0, 0, "energy") # 순수 평균 dB
+        mean_db = call(intensity, "Get mean", 0, 0, "energy")
         sps = st.session_state.user_syllables / dur if dur > 0 else 0
         smr_events, smr_count = auto_detect_smr_events(file_path)
         
@@ -333,26 +331,25 @@ TEMP_FILENAME = "temp_for_analysis.wav"
 with col_rec:
     st.markdown("#### 🎙️ 마이크 녹음")
     font_size = st.slider("🔍 글자 크기", 15, 50, 28, key="fs_read")
+    
+    # [수정됨] 문단 선택 시 키값(key)을 부여하여 강제 리렌더링 유도 -> 음절 수 자동 변경
     read_opt = st.radio("📖 낭독 문단 선택", ["1. 산책 (일반용 - 69음절)", "2. 바닷가의 추억 (SMR/정밀용 - 80음절)"])
     
     def styled_text(text, size): 
         return f"""<div style="font-size: {size}px; line-height: 1.8; border: 1px solid #ddd; padding: 15px; background-color: #f9f9f9; color: #333;">{text}</div>"""
 
     if "바닷가" in read_opt:
-        read_text = """
-        <strong>바닷가</strong>에 <strong>파도가</strong> 칩니다.<br>
-        <strong>무지개</strong> 아래 <strong>바둑이</strong>가 뜁니다.<br>
-        <strong>보트가</strong> 지나가고 <strong>버터구이</strong>를 먹습니다.<br>
-        <strong>포토카드</strong>를 <strong>부탁해</strong>서 <strong>돋보기</strong>로 봅니다.<br>
-        시장에서 <strong>빈대떡</strong>을 사 먹었습니다.
-        """
+        # [수정됨] 볼드체 제거 및 줄글 형태
+        read_text = "바닷가에 파도가 칩니다. 무지개 아래 바둑이가 뜁니다. 보트가 지나가고 버터구이를 먹습니다. 포토카드를 부탁해서 돋보기로 봅니다. 시장에서 빈대떡을 사 먹었습니다."
         default_syl = 80
     else:
         read_text = "높은 산에 올라가 맑은 공기를 마시며 소리를 지르면 가슴이 활짝 열리는 듯하다. 바닷가에 나가 조개를 주으며 넓게 펼쳐있는 바다를 바라보면 내 마음 역시 넓어지는 것 같다."
         default_syl = 69
         
     st.markdown(styled_text(read_text, font_size), unsafe_allow_html=True)
-    syllables_rec = st.number_input("전체 음절 수", 1, 500, default_syl, key="syl_rec")
+    
+    # [수정됨] key에 read_opt를 포함시켜 문단 변경 시 입력창이 새로고침되도록 함
+    syllables_rec = st.number_input("전체 음절 수", 1, 500, default_syl, key=f"syl_rec_{read_opt}")
     st.session_state.user_syllables = syllables_rec
     
     audio_buf = st.audio_input("낭독 녹음")
@@ -385,7 +382,6 @@ if st.session_state.get('is_analyzed'):
         st.plotly_chart(st.session_state['fig_plotly'], use_container_width=True)
     
     with c2:
-        # [복구됨] 강도 수동 보정 슬라이더
         db_adj = st.slider("강도(dB) 보정", -50.0, 50.0, -10.0)
         final_db = st.session_state['mean_db'] + db_adj
         
