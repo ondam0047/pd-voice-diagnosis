@@ -127,7 +127,7 @@ try: model_step1, model_step2 = train_models()
 except: model_step1, model_step2 = None, None
 
 # ==========================================
-# [이메일 전송 함수]
+# [이메일 전송 함수] 파일명: 이름.wav
 # ==========================================
 def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
     try:
@@ -141,6 +141,8 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_name = patient_info['name'].replace(" ", "")
+        
+        # 구글 시트용 파일명 (상세 정보 포함)
         log_filename = f"{safe_name}_{patient_info['age']}_{patient_info['gender']}_{timestamp}.wav"
 
         if not worksheet.row_values(1):
@@ -170,6 +172,7 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         msg['From'] = sender
         msg['To'] = receiver
         
+        # [수정] 이메일 첨부 파일명: 이름.wav
         email_attach_name = f"{safe_name}.wav"
         msg['Subject'] = f"[PD Data] {email_attach_name}"
 
@@ -187,6 +190,7 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
             part.set_payload(f.read())
         
         encoders.encode_base64(part)
+        # 첨부 파일명 설정
         part.add_header("Content-Disposition", f"attachment; filename={email_attach_name}")
         msg.attach(part)
 
@@ -331,7 +335,7 @@ with col_rec:
     st.markdown("#### 🎙️ 마이크 녹음")
     font_size = st.slider("🔍 글자 크기", 15, 50, 28, key="fs_read")
     
-    # 문단 선택 (Key 부여로 리렌더링 유도)
+    # 문단 선택
     read_opt = st.radio("📖 낭독 문단 선택", ["1. 산책 (일반용 - 69음절)", "2. 바닷가의 추억 (SMR/정밀용 - 80음절)"])
     
     def styled_text(text, size): 
@@ -346,7 +350,7 @@ with col_rec:
         
     st.markdown(styled_text(read_text, font_size), unsafe_allow_html=True)
     
-    # 음절 수 (자동 변경)
+    # 음절 수 자동 변경
     syllables_rec = st.number_input("전체 음절 수", 1, 500, default_syl, key=f"syl_rec_{read_opt}")
     st.session_state.user_syllables = syllables_rec
     
@@ -380,7 +384,6 @@ if st.session_state.get('is_analyzed'):
         st.plotly_chart(st.session_state['fig_plotly'], use_container_width=True)
     
     with c2:
-        # [복구됨] 수동 강도 보정
         db_adj = st.slider("강도(dB) 보정", -50.0, 50.0, -10.0)
         final_db = st.session_state['mean_db'] + db_adj
         
@@ -457,7 +460,6 @@ if st.session_state.get('is_analyzed'):
     
     if st.button("🚀 진단 결과 확인", key="btn_diag"):
         if model_step1:
-            # 1. Normal Cut-off: Artic >= 78
             if p_artic >= 78:
                 prob_normal, final_decision = 100.0, "Normal"
                 st.success(f"🟢 **정상 음성 (Normal) (100.0%)**")
@@ -475,58 +477,50 @@ if st.session_state.get('is_analyzed'):
                         final_decision = model_step2.predict(input_2)[0]
                         probs_sub = model_step2.predict_proba(input_2)[0]
                         
-                        # [VHI Ratio 계산]
                         ratio_e = vhi_e / 8.0
-                        ratio_p = vhi_p / 12.0
                         
-                        # ====================================================
-                        # [핵심] 경쟁적 스코어링 (Scoring Competition)
-                        # ====================================================
+                        # [심각도 점수 경쟁]
                         score_rate = 0
                         score_loud = 0
                         score_artic = 0
                         
-                        # 1. 말속도 점수 (Rate)
-                        if final_sps >= 5.0: score_rate += 3      # 매우 심각
-                        elif final_sps >= 4.5: score_rate += 2    # 심각
+                        # 말속도 점수
+                        if final_sps >= 5.0: score_rate += 3
+                        elif final_sps >= 4.5: score_rate += 2
                         if p_rate >= 70 or p_rate <= 30: score_rate += 2
-                        if ratio_e >= 0.75: score_rate += 1       # 정서적 요인
+                        if ratio_e >= 0.75: score_rate += 1
                         
-                        # 2. 강도 점수 (Loudness)
-                        if final_db <= 55.0: score_loud += 3      # 매우 심각
-                        elif final_db <= 60.0: score_loud += 2    # 심각
-                        if p_loud <= 30: score_loud += 3          # 청지각 매우 심각
+                        # 강도 점수
+                        if final_db <= 55.0: score_loud += 3
+                        elif final_db <= 60.0: score_loud += 2
+                        if p_loud <= 30: score_loud += 3
                         elif p_loud <= 50: score_loud += 2
                         
-                        # 3. 조음 점수 (Articulation)
-                        if p_artic <= 30: score_artic += 3        # 청지각 매우 심각
+                        # 조음 점수
+                        if p_artic <= 30: score_artic += 3
                         elif p_artic <= 50: score_artic += 2
                         
-                        # [승자 결정] 가장 높은 점수 획득한 그룹 선정
                         max_score = max(score_rate, score_loud, score_artic)
-                        
                         is_override = False
                         reason = ""
                         
-                        # [NEW] AI 확률 정보 추출
+                        # [NEW] AI 확률 추출
                         idx_loud = list(model_step2.classes_).index('강도 집단') if '강도 집단' in model_step2.classes_ else -1
                         idx_artic = list(model_step2.classes_).index('조음 집단') if '조음 집단' in model_step2.classes_ else -1
                         prob_loud = probs_sub[idx_loud] if idx_loud != -1 else 0
                         prob_artic = probs_sub[idx_artic] if idx_artic != -1 else 0
 
-                        # 점수가 2점 이상일 때만 Override 발동
                         if max_score >= 2:
                             is_override = True
                             
-                            # [Tie-Breaking Logic with AI Probability]
-                            # 만약 강도 점수와 조음 점수가 같고, 그게 최고점이라면? -> AI 확률로 승부
+                            # [Tie-Breaker: 동점 시 AI 확률 우선]
                             if (score_loud == max_score) and (score_artic == max_score):
                                 if prob_artic > prob_loud:
                                     final_decision = "조음 집단 (재조정됨 - AI확률 반영)"
-                                    reason = f"증상 심각도 동점(3점)이나 AI 예측 확률(조음 {prob_artic*100:.1f}%) 우세"
+                                    reason = f"심각도 동점(3점)이나 AI 예측(조음 {prob_artic*100:.1f}%) 우세"
                                 else:
                                     final_decision = "강도 집단 (재조정됨 - AI확률 반영)"
-                                    reason = f"증상 심각도 동점(3점)이나 AI 예측 확률(강도 {prob_loud*100:.1f}%) 우세"
+                                    reason = f"심각도 동점(3점)이나 AI 예측(강도 {prob_loud*100:.1f}%) 우세"
                             
                             elif score_loud == max_score:
                                 final_decision = "강도 집단 (재조정됨)"
