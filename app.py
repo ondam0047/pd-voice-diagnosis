@@ -24,7 +24,6 @@ from sklearn.ensemble import RandomForestClassifier
 from scipy.signal import find_peaks
 
 # --- 페이지 기본 설정 ---
-# [수정됨] 브라우저 탭 제목도 함께 변경
 st.set_page_config(page_title="파킨슨병 환자 하위유형 분류 프로그램", layout="wide")
 
 # ==========================================
@@ -57,7 +56,7 @@ def setup_korean_font():
 setup_korean_font()
 
 # ==========================================
-# 0. 머신러닝 모델 학습 (Version 1.0)
+# 0. 머신러닝 모델 학습
 # ==========================================
 @st.cache_resource
 def train_models():
@@ -128,7 +127,7 @@ try: model_step1, model_step2 = train_models()
 except: model_step1, model_step2 = None, None
 
 # ==========================================
-# [이메일 전송 함수] 이름.wav
+# [이메일 전송 함수]
 # ==========================================
 def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
     try:
@@ -228,63 +227,82 @@ def auto_detect_smr_events(sound_path, top_n=20):
         return [], 0
 
 # ==========================================
-# [분석 로직] Median ± 3SD 이상치 제거 적용
+# [분석 로직] Outlier 제거 (Median ± 3SD + Range Check)
 # ==========================================
 def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
     try:
         sound = parselmouth.Sound(sound_path)
         pitch = call(sound, "To Pitch", 0.0, f0_min, f0_max)
-        pitch_vals = np.array(pitch.selected_array['frequency'], dtype=np.float64)
+        pitch_array = pitch.selected_array['frequency'] # parselmouth numpy array extraction
+        pitch_values = np.array(pitch_array, dtype=np.float64)
         duration = sound.get_total_duration()
-        times = np.linspace(0, duration, len(pitch_vals))
+        n_points = len(pitch_values)
+        time_array = np.linspace(0, duration, n_points)
         
-        # 1. 0(무성음) 제외
-        valid_mask = pitch_vals > 0
-        valid_p = pitch_vals[valid_mask]
-        valid_t = times[valid_mask]
-        
-        clean_p = []
-        clean_t = []
-        mean_f0 = 0
-        rng = 0
+        # 0이 아닌 값(유성음) 추출
+        valid_indices = pitch_values != 0
+        valid_times = time_array[valid_indices]
+        valid_pitch = pitch_values[valid_indices]
 
-        # 2. [핵심] 중앙값 기준 ±3 표준편차 이상치 제거 로직
-        if len(valid_p) > 0:
-            median_val = np.median(valid_p)
-            std_val = np.std(valid_p)
+        # [Outlier Removal Logic]
+        if len(valid_pitch) > 0:
+            median_f0 = np.median(valid_pitch)
+            std_f0 = np.std(valid_pitch)
             
-            # 너무 좁은 범위를 방지하기 위해 최소 SD 보장
-            if std_val < 5: std_val = 5
+            # 중앙값 기준 3 표준편차 범위를 벗어나면 제거 (Doubling/Halving 방지)
+            upper_limit = median_f0 + 3 * std_f0
+            lower_limit = median_f0 - 3 * std_f0
             
-            lower_bound = median_val - 3 * std_val
-            upper_bound = median_val + 3 * std_val
+            # 절대적 최소/최대 범위도 한 번 더 체크 (70~500Hz)
+            clean_mask = (valid_pitch <= upper_limit) & (valid_pitch >= lower_limit) & \
+                         (valid_pitch <= f0_max) & (valid_pitch >= f0_min)
             
-            # 필터링
-            clean_mask = (valid_p >= lower_bound) & (valid_p <= upper_bound)
-            clean_p = valid_p[clean_mask]
-            clean_t = valid_t[clean_mask]
+            final_times = valid_times[clean_mask]
+            final_pitch = valid_pitch[clean_mask]
             
-            if len(clean_p) > 0:
-                mean_f0 = np.mean(clean_p)
-                rng = np.max(clean_p) - np.min(clean_p)
-        
-        fig = go.Figure()
-        
-        if len(clean_p) > 0:
-            fig.add_trace(go.Scatter(x=clean_t, y=clean_p, mode='markers', marker=dict(size=4, color='red'), name='Pitch'))
-            # 이상치 제거 후 Y축 범위 자동 조정
-            y_min = max(0, np.min(clean_p) - 20)
-            y_max = np.max(clean_p) + 20
-            fig.update_layout(title="음도 컨투어 (이상치 제거됨)", xaxis_title="Time(s)", yaxis_title="Hz", height=300, yaxis=dict(range=[y_min, y_max]))
+            if len(final_pitch) > 0:
+                cleaned_mean_f0 = np.mean(final_pitch)
+                cleaned_range = np.max(final_pitch) - np.min(final_pitch)
+            else:
+                cleaned_mean_f0 = 0
+                cleaned_range = 0
         else:
-            fig.update_layout(title="음도 컨투어 (감지된 음성 없음)", height=300)
+            final_times = valid_times
+            final_pitch = valid_pitch
+            cleaned_mean_f0 = 0
+            cleaned_range = 0
 
-        return fig, mean_f0, rng, duration
-    except: return None, 0, 0, 0
+        # 그래프 그리기
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(
+            x=final_times, y=final_pitch,
+            mode='markers', name='Pitch (Hz)',
+            marker=dict(size=4, color='red'),
+            hovertemplate='시간: %{x:.2f}초<br>음도: %{y:.1f}Hz'
+        ))
+        
+        # 평균선 추가
+        if cleaned_mean_f0 > 0:
+            fig.add_trace(go.Scatter(
+                x=[0, duration], y=[cleaned_mean_f0, cleaned_mean_f0],
+                mode='lines', name=f'평균 ({cleaned_mean_f0:.1f}Hz)',
+                line=dict(color='gray', dash='dash')
+            ))
+
+        fig.update_layout(
+            title=f"음도 컨투어 (Outlier 제거됨)",
+            xaxis_title="시간 (초)", yaxis_title="음도 (Hz)",
+            yaxis=dict(range=[0, 350]), # Y축 고정 (요청사항 반영)
+            height=300, margin=dict(l=20, r=20, t=40, b=20),
+            showlegend=True
+        )
+        return fig, cleaned_mean_f0, cleaned_range, duration
+    except Exception as e:
+        return None, 0, 0, 0 
 
 def run_analysis_logic(file_path):
     try:
-        # [설정] 분석 범위는 70~500Hz로 넓게 잡고, 내부에서 Median Filter로 정제
+        # [설정] 분석 범위 70 ~ 500Hz 전달 (함수 내부에서 2차 필터링)
         fig, f0, rng, dur = plot_pitch_contour_plotly(file_path, 70, 500)
         sound = parselmouth.Sound(file_path)
         intensity = sound.to_intensity()
@@ -311,14 +329,13 @@ def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e):
     if db >= 60: positives.append(f"평균 음성 강도가 {db:.1f} dB로, 일반적인 대화 수준(60dB 이상)의 성량을 튼튼하게 유지하고 있습니다.")
 
     if db < 60: negatives.append(f"평균 음성 강도가 {db:.1f} dB로 다소 작습니다. 이는 파킨슨병의 대표적 증상인 '강도 감소(Hypophonia)'와 유사하여 발성 훈련이 필요할 수 있습니다.")
-    if sps >= 4.5: negatives.append(f"말속도가 {sps:.2f} SPS로 지나치게 빠릅니다. 이는 발화 제어가 어려워 말이 빠르지는 가속 징후(Short rushes of speech)일 가능성이 있습니다.")
+    if sps >= 4.5: negatives.append(f"말속도가 {sps:.2f} SPS로 지나치게 빠릅니다. 이는 발화 제어가 어려워 말이 빨라지는 가속 징후(Short rushes of speech)일 가능성이 있습니다.")
     if artic < 70: negatives.append(f"청지각적 조음 정확도가 {artic}점으로 다소 낮습니다. 발음이 불분명해지는 조음 장애(Dysarthria) 징후가 관찰됩니다.")
     if vhi >= 20: negatives.append(f"VHI 총점이 {vhi}점으로 높습니다. 환자 스스로 음성 문제로 인한 생활의 불편함과 심리적 위축을 크게 느끼고 있습니다.")
     if vhi_e >= 5: negatives.append("특히 VHI 정서(E) 점수가 높아, 말하기에 대한 불안감이나 자신감 저하가 감지됩니다.")
     return positives, negatives
 
 # --- UI Title ---
-# [수정됨] 제목 및 설명 변경
 st.title("파킨슨병 환자 하위유형 분류 프로그램")
 st.markdown("이 프로그램은 청지각적 평가, 음향학적 분석, 자가보고(VHI-10) 데이터를 통합하여 파킨슨병 환자의 음성 특성을 3가지 하위 유형으로 분류합니다.")
 
@@ -392,12 +409,14 @@ if st.session_state.get('is_analyzed'):
         st.plotly_chart(st.session_state['fig_plotly'], use_container_width=True)
     
     with c2:
-        db_adj = st.slider("강도(dB) 보정", -50.0, 50.0, -10.0)
-        final_db = st.session_state['mean_db'] + db_adj
+        # [변경됨] 수동 슬라이더 삭제됨 -> 자동 보정 알림 표시
+        st.info(f"💡 **강도 자동 보정 완료**\n\n최대 피크를 75dB로 가정하고, 평균 강도를 **{st.session_state['mean_db']:.2f}dB**로 자동 정규화했습니다.")
+        
         range_adj = st.slider("음도범위(Hz) 보정", 0.0, 300.0, float(st.session_state['pitch_range']))
         s_time, e_time = st.slider("말속도 구간(초)", 0.0, st.session_state['duration'], (0.0, st.session_state['duration']), 0.01)
         sel_dur = max(0.1, e_time - s_time)
         final_sps = st.session_state.user_syllables / sel_dur
+        final_db = st.session_state['mean_db']
         
         st.write("#### 📊 음향학적 분석 결과")
         result_df = pd.DataFrame({
