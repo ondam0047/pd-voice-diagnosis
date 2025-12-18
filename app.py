@@ -24,7 +24,7 @@ from sklearn.ensemble import RandomForestClassifier
 from scipy.signal import find_peaks
 
 # --- 페이지 기본 설정 ---
-st.set_page_config(page_title="PD 음성 데이터 수집 시스템 (V2.5)", layout="wide")
+st.set_page_config(page_title="PD 음성 데이터 수집 시스템 (V2.6)", layout="wide")
 
 # ==========================================
 # [설정] 구글 시트 정보 (Secrets)
@@ -131,6 +131,7 @@ except: model_step1, model_step2 = None, None
 # ==========================================
 def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
     try:
+        # 1. 구글 스프레드시트 기록
         creds = service_account.Credentials.from_service_account_info(
             st.secrets["gcp_service_account"],
             scopes=['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
@@ -162,6 +163,7 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         ]
         worksheet.append_row(row_data)
 
+        # 2. 이메일 전송
         sender = st.secrets["email"]["sender"]
         password = st.secrets["email"]["password"]
         receiver = st.secrets["email"]["receiver"]
@@ -200,9 +202,9 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         return False, str(e)
 
 # ==========================================
-# [SMR 측정 함수] 상세 정보 포함
+# [SMR 측정 함수] Version 1.0 로직 복구
 # ==========================================
-def auto_detect_smr_events(sound_path, top_n=20): # 개수 늘림
+def auto_detect_smr_events(sound_path, top_n=10):
     try:
         sound = parselmouth.Sound(sound_path)
         intensity = sound.to_intensity(time_step=0.005)
@@ -223,7 +225,7 @@ def auto_detect_smr_events(sound_path, top_n=20): # 개수 늘림
             candidates.append({"time": time_point, "depth": depth})
             
         candidates.sort(key=lambda x: x['time'])
-        return candidates, len(candidates)
+        return candidates[:top_n], len(candidates)
     except:
         return [], 0
 
@@ -285,7 +287,7 @@ def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e):
 
 # --- UI Title ---
 st.title("📂 파킨슨 환자 교육 및 음성 데이터 수집 시스템")
-st.markdown("Version 2.5 (SMR Detail View)")
+st.markdown("Version 2.6 (SMR Table Restore)")
 
 # 1. 사이드바
 with st.sidebar:
@@ -306,7 +308,7 @@ with col_rec:
     st.markdown("#### 🎙️ 마이크 녹음")
     font_size = st.slider("🔍 글자 크기", 15, 50, 28, key="fs_read")
     
-    # [복구됨] 문단 선택 기능 (SMR 텍스트 포함)
+    # [복구됨] 문단 선택 기능
     read_opt = st.radio("📖 낭독 문단 선택", ["1. 산책 (일반용 - 69음절)", "2. 바닷가의 추억 (SMR/정밀용 - 80음절)"])
     
     def styled_text(text, size): 
@@ -370,13 +372,23 @@ if st.session_state.get('is_analyzed'):
         })
         st.dataframe(result_df, hide_index=True)
 
-        # [NEW] SMR 상세 테이블 추가
-        if st.session_state.get('smr_count', 0) > 0:
-            st.write("##### 🔬 SMR(조음교대) 감지 구간 상세")
-            smr_data = st.session_state['smr_events']
-            df_smr = pd.DataFrame(smr_data)
-            df_smr.columns = ["감지 시간(초)", "파열 강도(dB)"]
-            st.dataframe(df_smr, hide_index=True)
+        # [복구됨] SMR 단어 매칭 및 상세 테이블
+        if st.session_state.get('smr_events'):
+            st.markdown("##### 🔎 SMR 자동 분석 (단어 매칭)")
+            events = st.session_state['smr_events']
+            smr_df_data = []
+            # 바닷가의 추억 단어 리스트
+            words = ["바닷가", "파도가", "무지개", "바둑이", "보트가", "버터구이", "포토카드", "부탁해", "돋보기", "빈대떡"]
+            
+            for i, ev in enumerate(events):
+                # 단어 리스트보다 이벤트가 많으면 '구간 N'으로 표시
+                label = words[i] if i < len(words) else f"구간 {i+1}"
+                # 깊이에 따른 신호등 표시
+                status = "🟢 양호" if ev['depth'] >= 20 else ("🟡 주의" if ev['depth'] >= 15 else "🔴 불량")
+                smr_df_data.append({"단어": label, "폐쇄 깊이(dB)": f"{ev['depth']:.1f}", "상태": status})
+            
+            # 가로(Transpose)로 보여주기
+            st.dataframe(pd.DataFrame(smr_df_data).T)
 
     st.markdown("---")
     st.subheader("3. 청지각 및 VHI-10 입력")
