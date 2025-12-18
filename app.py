@@ -227,7 +227,7 @@ def auto_detect_smr_events(sound_path, top_n=20):
         return [], 0
 
 # ==========================================
-# [분석 로직] 백분위수(Percentile) 필터로 확실한 제거
+# [분석 로직] Median Ratio 필터로 확실한 옥타브 제거
 # ==========================================
 def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
     try:
@@ -247,14 +247,14 @@ def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
         mean_f0 = 0
         rng = 0
 
-        # 2. [변경됨] 상위 5%, 하위 5% 강제 절사 (확실한 이상치 제거)
+        # 2. [핵심] 중앙값 대비 비율 필터 (Octave Jump 제거)
+        # 중앙값의 0.6배 ~ 1.6배 사이만 유효한 음성으로 간주
         if len(valid_p) > 0:
-            # 5번째, 95번째 백분위수 계산 (양쪽 끝 5%씩 무조건 버림)
-            p05 = np.percentile(valid_p, 5)
-            p95 = np.percentile(valid_p, 95)
+            median_f0 = np.median(valid_p)
+            lower_bound = median_f0 * 0.6
+            upper_bound = median_f0 * 1.6
             
-            # 범위 밖의 값은 가차없이 버림
-            clean_mask = (valid_p >= p05) & (valid_p <= p95)
+            clean_mask = (valid_p >= lower_bound) & (valid_p <= upper_bound)
             clean_p = valid_p[clean_mask]
             clean_t = valid_t[clean_mask]
             
@@ -266,16 +266,10 @@ def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
         
         if len(clean_p) > 0:
             fig.add_trace(go.Scatter(x=clean_t, y=clean_p, mode='markers', marker=dict(size=4, color='red'), name='Pitch'))
-            # 그래프 범위도 잘라낸 데이터에 맞춰서 깔끔하게 조정 (여백 20Hz)
+            # 그래프 Y축 자동 조정
             y_min = max(0, np.min(clean_p) - 20)
             y_max = np.max(clean_p) + 20
-            fig.update_layout(
-                title="음도 컨투어 (Outlier 5% 절사됨)", 
-                xaxis_title="시간 (초)", 
-                yaxis_title="음도 (Hz)", 
-                height=300, 
-                yaxis=dict(range=[y_min, y_max])
-            )
+            fig.update_layout(title="음도 컨투어 (이상치 제거됨)", xaxis_title="Time(s)", yaxis_title="Hz", height=300, yaxis=dict(range=[y_min, y_max]))
         else:
             fig.update_layout(title="음도 컨투어 (감지된 음성 없음)", height=300)
 
@@ -284,11 +278,11 @@ def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
 
 def run_analysis_logic(file_path):
     try:
-        # [설정] 분석 범위는 넓게(500) 잡고, 내부에서 백분위수로 자름
+        # [설정] 분석 범위는 넓게(500) 잡고, 내부에서 Median Ratio로 정제
         fig, f0, rng, dur = plot_pitch_contour_plotly(file_path, 70, 500)
         sound = parselmouth.Sound(file_path)
         intensity = sound.to_intensity()
-        mean_db = call(intensity, "Get mean", 0, 0, "energy")
+        mean_db = call(intensity, "Get mean", 0, 0, "energy") # [복구됨] 순수 평균 dB
         sps = st.session_state.user_syllables / dur if dur > 0 else 0
         smr_events, smr_count = auto_detect_smr_events(file_path)
         
@@ -391,14 +385,14 @@ if st.session_state.get('is_analyzed'):
         st.plotly_chart(st.session_state['fig_plotly'], use_container_width=True)
     
     with c2:
-        # [변경됨] 자동 보정 알림 표시
-        st.info(f"💡 **강도 자동 보정 완료**\n\n최대 피크를 75dB로 가정하고, 평균 강도를 **{st.session_state['mean_db']:.2f}dB**로 자동 정규화했습니다.")
+        # [복구됨] 강도 수동 보정 슬라이더
+        db_adj = st.slider("강도(dB) 보정", -50.0, 50.0, -10.0)
+        final_db = st.session_state['mean_db'] + db_adj
         
         range_adj = st.slider("음도범위(Hz) 보정", 0.0, 300.0, float(st.session_state['pitch_range']))
         s_time, e_time = st.slider("말속도 구간(초)", 0.0, st.session_state['duration'], (0.0, st.session_state['duration']), 0.01)
         sel_dur = max(0.1, e_time - s_time)
         final_sps = st.session_state.user_syllables / sel_dur
-        final_db = st.session_state['mean_db']
         
         st.write("#### 📊 음향학적 분석 결과")
         result_df = pd.DataFrame({
