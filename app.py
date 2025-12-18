@@ -233,34 +233,35 @@ def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
     try:
         sound = parselmouth.Sound(sound_path)
         pitch = call(sound, "To Pitch", 0.0, f0_min, f0_max)
-        pitch_vals = np.array(pitch.selected_array['frequency'], dtype=np.float64)
+        pitch_array = pitch.selected_array['frequency']
+        pitch_values = np.array(pitch_array, dtype=np.float64)
         duration = sound.get_total_duration()
-        times = np.linspace(0, duration, len(pitch_vals))
+        n_points = len(pitch_values)
+        time_array = np.linspace(0, duration, n_points)
         
-        # 1. 0(무성음) 제외
-        valid_mask = pitch_vals > 0
-        valid_p = pitch_vals[valid_mask]
-        valid_t = times[valid_mask]
-        
-        clean_p = []
-        clean_t = []
-        mean_f0 = 0
-        rng = 0
+        valid_indices = pitch_values != 0
+        valid_times = time_array[valid_indices]
+        valid_pitch = pitch_values[valid_indices]
 
-        # 2. [핵심] 중앙값 대비 비율 필터 (Octave Jump 제거)
-        if len(valid_p) > 0:
-            median_f0 = np.median(valid_p)
+        if len(valid_pitch) > 0:
+            median_f0 = np.median(valid_pitch)
             lower_bound = median_f0 * 0.6
             upper_bound = median_f0 * 1.6
             
-            clean_mask = (valid_p >= lower_bound) & (valid_p <= upper_bound)
-            clean_p = valid_p[clean_mask]
-            clean_t = valid_t[clean_mask]
+            clean_mask = (valid_pitch >= lower_bound) & (valid_pitch <= upper_bound)
+            clean_p = valid_pitch[clean_mask]
+            clean_t = valid_times[clean_mask]
             
             if len(clean_p) > 0:
                 mean_f0 = np.mean(clean_p)
                 rng = np.max(clean_p) - np.min(clean_p)
-        
+            else:
+                mean_f0, rng = 0, 0
+                clean_p, clean_t = [], []
+        else:
+            clean_p, clean_t = [], []
+            mean_f0, rng = 0, 0
+
         fig = go.Figure()
         if len(clean_p) > 0:
             fig.add_trace(go.Scatter(x=clean_t, y=clean_p, mode='markers', marker=dict(size=4, color='red'), name='Pitch'))
@@ -379,6 +380,7 @@ if st.session_state.get('is_analyzed'):
         st.plotly_chart(st.session_state['fig_plotly'], use_container_width=True)
     
     with c2:
+        # [복구됨] 수동 강도 보정
         db_adj = st.slider("강도(dB) 보정", -50.0, 50.0, -10.0)
         final_db = st.session_state['mean_db'] + db_adj
         
@@ -506,11 +508,27 @@ if st.session_state.get('is_analyzed'):
                         is_override = False
                         reason = ""
                         
-                        # 점수가 2점 이상일 때만 Override 발동 (사소한 건 무시)
+                        # [NEW] AI 확률 정보 추출
+                        idx_loud = list(model_step2.classes_).index('강도 집단') if '강도 집단' in model_step2.classes_ else -1
+                        idx_artic = list(model_step2.classes_).index('조음 집단') if '조음 집단' in model_step2.classes_ else -1
+                        prob_loud = probs_sub[idx_loud] if idx_loud != -1 else 0
+                        prob_artic = probs_sub[idx_artic] if idx_artic != -1 else 0
+
+                        # 점수가 2점 이상일 때만 Override 발동
                         if max_score >= 2:
                             is_override = True
-                            if score_loud == max_score:
-                                # 동점일 경우 강도를 최우선 (치료 시급성)
+                            
+                            # [Tie-Breaking Logic with AI Probability]
+                            # 만약 강도 점수와 조음 점수가 같고, 그게 최고점이라면? -> AI 확률로 승부
+                            if (score_loud == max_score) and (score_artic == max_score):
+                                if prob_artic > prob_loud:
+                                    final_decision = "조음 집단 (재조정됨 - AI확률 반영)"
+                                    reason = f"증상 심각도 동점(3점)이나 AI 예측 확률(조음 {prob_artic*100:.1f}%) 우세"
+                                else:
+                                    final_decision = "강도 집단 (재조정됨 - AI확률 반영)"
+                                    reason = f"증상 심각도 동점(3점)이나 AI 예측 확률(강도 {prob_loud*100:.1f}%) 우세"
+                            
+                            elif score_loud == max_score:
                                 final_decision = "강도 집단 (재조정됨)"
                                 reason = f"강도 심각도 {score_loud}점 (최고점)"
                             elif score_artic == max_score:
@@ -542,7 +560,7 @@ if st.session_state.get('is_analyzed'):
                             else: st.info("💡 특징: 발음이 뭉개지고 정확도가 떨어집니다.")
                             
                             if is_override:
-                                st.warning(f"※ 참고: AI 예측과 달리, 증상 심각도 경쟁[{reason}]을 통해 최종 진단이 보정되었습니다.")
+                                st.warning(f"※ 참고: AI 예측과 달리, [{reason}]을 근거로 최종 진단이 보정되었습니다.")
 
                     else: final_decision = "Parkinson (Subtype Model Error)"
 
