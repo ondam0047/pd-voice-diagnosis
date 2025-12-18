@@ -91,6 +91,7 @@ def train_models():
                     raw_p = row.get('VHI_신체', 0)
                     raw_f = row.get('VHI_기능', 0)
                     raw_e = row.get('VHI_정서', 0)
+                    # VHI-30 데이터 호환 (40점 초과 시 가중치 적용)
                     if raw_total > 40: 
                         vhi_f = (raw_f / 40.0) * 20.0
                         vhi_p = (raw_p / 40.0) * 12.0
@@ -245,7 +246,6 @@ def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
 
         if len(valid_pitch) > 0:
             median_f0 = np.median(valid_pitch)
-            # Octave Jump 제거용 Ratio 필터 (0.6 ~ 1.6)
             lower_bound = median_f0 * 0.6
             upper_bound = median_f0 * 1.6
             
@@ -453,7 +453,7 @@ if st.session_state.get('is_analyzed'):
     
     if st.button("🚀 진단 결과 확인", key="btn_diag"):
         if model_step1:
-            # [수정] 통계적 Cut-off 적용 (Normal: Artic >= 78)
+            # 1. Normal Cut-off: Artic >= 78
             if p_artic >= 78:
                 prob_normal, final_decision = 100.0, "Normal"
                 st.success(f"🟢 **정상 음성 (Normal) (100.0%)**")
@@ -471,30 +471,41 @@ if st.session_state.get('is_analyzed'):
                         final_decision = model_step2.predict(input_2)[0]
                         probs_sub = model_step2.predict_proba(input_2)[0]
                         
-                        # [수정] 통계적 Cut-off 기반 재조정 로직
+                        # [VHI Ratio 계산]
+                        ratio_f = vhi_f / 20.0
+                        ratio_p = vhi_p / 12.0
+                        ratio_e = vhi_e / 8.0
+                        
                         reason = ""
                         is_override = False
                         
-                        # 1. 말속도 집단: Rate > 65 OR Rate < 40 OR SPS >= 4.5
-                        if (p_rate >= 65 or p_rate < 40 or final_sps >= 4.5):
+                        # [중요] VHI 가중치 기반 재조정 로직 (User Logic)
+                        
+                        # 1. 말속도 집단 (Rate)
+                        # 조건: 정서(E) 비율이 75% 이상(6점 이상) OR (기계적 가속 or 청지각 가속/감속)
+                        if (ratio_e >= 0.75) or (final_sps >= 4.5) or (p_rate >= 65) or (p_rate < 40):
                             if "말속도" not in final_decision:
                                 final_decision = "말속도 집단 (재조정됨)"
-                                reason = "말속도 가속 (4.5 SPS 이상) 또는 청지각 속도 부적절"
+                                reason = "정서적 불안(E점수 높음) 또는 말속도 이상"
                                 is_override = True
                         
-                        # 2. 강도 집단: Loudness < 40 OR dB < 60
-                        if not is_override and (p_loud < 40 or final_db < 60.0):
-                            if "강도" not in final_decision:
-                                final_decision = "강도 집단 (재조정됨)"
-                                reason = "강도 저하 (60dB 미만 또는 청지각 40점 미만)"
-                                is_override = True
-                                
-                        # 3. 조음 집단: Articulation < 50
-                        if not is_override and (p_artic < 50):
-                            if "조음" not in final_decision:
-                                final_decision = "조음 집단 (재조정됨)"
-                                reason = "조음 정확도 저하 (50점 미만)"
-                                is_override = True
+                        # 2. 강도 집단 (Intensity)
+                        # 조건: 신체(P) 불편함 우세 & 정서(E) 낮음 OR 강도 저하
+                        if not is_override:
+                            if (ratio_p > 0.5 and ratio_e < 0.5) or (final_db < 60.0) or (p_loud < 40):
+                                if "강도" not in final_decision:
+                                    final_decision = "강도 집단 (재조정됨)"
+                                    reason = "신체적 발성 제한 또는 강도 저하"
+                                    is_override = True
+                        
+                        # 3. 조음 집단 (Articulation)
+                        # 조건: VHI 총점은 낮은데(15점 미만) 조음 정확도만 떨어짐
+                        if not is_override:
+                            if (vhi_total < 15 and p_artic < 50): # Paradoxical pattern
+                                if "조음" not in final_decision:
+                                    final_decision = "조음 집단 (재조정됨)"
+                                    reason = "자각 증상(VHI) 경미하나 조음 정확도 저하"
+                                    is_override = True
                         
                         st.error(f"🔴 **파킨슨 특성 감지:** {final_decision}")
                         
@@ -517,9 +528,8 @@ if st.session_state.get('is_analyzed'):
                             elif "말속도" in final_decision: st.info("💡 특징: 말이 빠르거나 리듬이 불규칙하며, 정서적 불안감이 동반될 수 있습니다.")
                             else: st.info("💡 특징: 발음이 뭉개지고 정확도가 떨어집니다.")
                             
-                            # [수정] 재조정 이유 상세 표시
                             if is_override:
-                                st.warning(f"※ 참고: AI 모델 예측과 달리, 중요 임상 지표 [{reason}]가 우선 적용되어 최종 진단이 보정되었습니다.")
+                                st.warning(f"※ 참고: AI 모델 예측과 달리, 중요 임상 지표 및 VHI 패턴[{reason}]이 우선 적용되어 최종 진단이 보정되었습니다.")
 
                     else: final_decision = "Parkinson (Subtype Model Error)"
 
