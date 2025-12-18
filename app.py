@@ -24,7 +24,7 @@ from sklearn.ensemble import RandomForestClassifier
 from scipy.signal import find_peaks
 
 # --- 페이지 기본 설정 ---
-st.set_page_config(page_title="PD 음성 데이터 수집 시스템 (V2.4)", layout="wide")
+st.set_page_config(page_title="PD 음성 데이터 수집 시스템 (V2.5)", layout="wide")
 
 # ==========================================
 # [설정] 구글 시트 정보 (Secrets)
@@ -131,7 +131,6 @@ except: model_step1, model_step2 = None, None
 # ==========================================
 def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
     try:
-        # 1. 구글 스프레드시트 기록
         creds = service_account.Credentials.from_service_account_info(
             st.secrets["gcp_service_account"],
             scopes=['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
@@ -163,7 +162,6 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         ]
         worksheet.append_row(row_data)
 
-        # 2. 이메일 전송
         sender = st.secrets["email"]["sender"]
         password = st.secrets["email"]["password"]
         receiver = st.secrets["email"]["receiver"]
@@ -202,16 +200,15 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         return False, str(e)
 
 # ==========================================
-# [복구됨] SMR 측정 함수 (Version 1.0)
+# [SMR 측정 함수] 상세 정보 포함
 # ==========================================
-def auto_detect_smr_events(sound_path, top_n=10):
+def auto_detect_smr_events(sound_path, top_n=20): # 개수 늘림
     try:
         sound = parselmouth.Sound(sound_path)
         intensity = sound.to_intensity(time_step=0.005)
         times = intensity.xs()
         values = intensity.values[0, :]
         
-        # 반전시켜서 Peak 찾기 (SMR 방식)
         inv_vals = -values
         peaks, properties = find_peaks(inv_vals, prominence=5, distance=40)
         
@@ -226,7 +223,7 @@ def auto_detect_smr_events(sound_path, top_n=10):
             candidates.append({"time": time_point, "depth": depth})
             
         candidates.sort(key=lambda x: x['time'])
-        return candidates[:top_n], len(candidates)
+        return candidates, len(candidates)
     except:
         return [], 0
 
@@ -258,7 +255,7 @@ def run_analysis_logic(file_path):
         mean_db = call(intensity, "Get mean", 0, 0, "energy")
         sps = st.session_state.user_syllables / dur if dur > 0 else 0
         
-        # [복구] SMR 이벤트 감지
+        # SMR 이벤트 감지
         smr_events, smr_count = auto_detect_smr_events(file_path)
         
         st.session_state.update({
@@ -288,7 +285,7 @@ def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e):
 
 # --- UI Title ---
 st.title("📂 파킨슨 환자 교육 및 음성 데이터 수집 시스템")
-st.markdown("Version 2.4 (Text & SMR Fix)")
+st.markdown("Version 2.5 (SMR Detail View)")
 
 # 1. 사이드바
 with st.sidebar:
@@ -309,14 +306,13 @@ with col_rec:
     st.markdown("#### 🎙️ 마이크 녹음")
     font_size = st.slider("🔍 글자 크기", 15, 50, 28, key="fs_read")
     
-    # [수정됨] 문단 선택 기능 (Version 1.0 텍스트 완벽 복구)
+    # [복구됨] 문단 선택 기능 (SMR 텍스트 포함)
     read_opt = st.radio("📖 낭독 문단 선택", ["1. 산책 (일반용 - 69음절)", "2. 바닷가의 추억 (SMR/정밀용 - 80음절)"])
     
     def styled_text(text, size): 
         return f"""<div style="font-size: {size}px; line-height: 1.8; border: 1px solid #ddd; padding: 15px; background-color: #f9f9f9; color: #333;">{text}</div>"""
 
     if "바닷가" in read_opt:
-        # 선생님이 주신 HTML 태그가 포함된 텍스트
         read_text = """
         <strong>바닷가</strong>에 <strong>파도가</strong> 칩니다.<br>
         <strong>무지개</strong> 아래 <strong>바둑이</strong>가 뜁니다.<br>
@@ -324,11 +320,10 @@ with col_rec:
         <strong>포토카드</strong>를 <strong>부탁해</strong>서 <strong>돋보기</strong>로 봅니다.<br>
         시장에서 <strong>빈대떡</strong>을 사 먹었습니다.
         """
-        default_syl = 80 # 바닷가의 추억 80음절
+        default_syl = 80
     else:
-        # 산책 문단
         read_text = "높은 산에 올라가 맑은 공기를 마시며 소리를 지르면 가슴이 활짝 열리는 듯하다. 바닷가에 나가 조개를 주으며 넓게 펼쳐있는 바다를 바라보면 내 마음 역시 넓어지는 것 같다."
-        default_syl = 69 # 산책 69음절 (수정됨)
+        default_syl = 69
         
     st.markdown(styled_text(read_text, font_size), unsafe_allow_html=True)
     
@@ -368,13 +363,20 @@ if st.session_state.get('is_analyzed'):
         sel_dur = max(0.1, e_time - s_time)
         final_sps = st.session_state.user_syllables / sel_dur
         
-        # [복구] SMR 및 음향 수치 표
         st.write("#### 📊 음향학적 분석 결과")
         result_df = pd.DataFrame({
             "항목": ["평균 강도(dB)", "평균 음도(Hz)", "음도 범위(Hz)", "말속도(SPS)", "SMR(회)"],
             "수치": [f"{final_db:.2f}", f"{st.session_state['f0_mean']:.2f}", f"{range_adj:.2f}", f"{final_sps:.2f}", f"{st.session_state.get('smr_count', 0)}"]
         })
         st.dataframe(result_df, hide_index=True)
+
+        # [NEW] SMR 상세 테이블 추가
+        if st.session_state.get('smr_count', 0) > 0:
+            st.write("##### 🔬 SMR(조음교대) 감지 구간 상세")
+            smr_data = st.session_state['smr_events']
+            df_smr = pd.DataFrame(smr_data)
+            df_smr.columns = ["감지 시간(초)", "파열 강도(dB)"]
+            st.dataframe(df_smr, hide_index=True)
 
     st.markdown("---")
     st.subheader("3. 청지각 및 VHI-10 입력")
@@ -510,6 +512,5 @@ if st.button("☁️ 데이터 전송 (메일+시트)", type="primary"):
         if success:
             st.session_state.is_saved = True
             st.success(f"✅ 처리 완료! {msg}")
-            # 풍선 효과 삭제됨
         else:
             st.error(f"❌ 전송 실패: {msg}")
