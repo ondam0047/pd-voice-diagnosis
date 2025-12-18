@@ -141,6 +141,8 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_name = patient_info['name'].replace(" ", "")
+        
+        # 구글 시트용 파일명 (상세 정보 포함)
         log_filename = f"{safe_name}_{patient_info['age']}_{patient_info['gender']}_{timestamp}.wav"
 
         if not worksheet.row_values(1):
@@ -170,6 +172,7 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         msg['From'] = sender
         msg['To'] = receiver
         
+        # [수정] 이메일 첨부 파일명: 이름.wav
         email_attach_name = f"{safe_name}.wav"
         msg['Subject'] = f"[PD Data] {email_attach_name}"
 
@@ -187,6 +190,7 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
             part.set_payload(f.read())
         
         encoders.encode_base64(part)
+        # 첨부 파일명 설정
         part.add_header("Content-Disposition", f"attachment; filename={email_attach_name}")
         msg.attach(part)
 
@@ -227,7 +231,7 @@ def auto_detect_smr_events(sound_path, top_n=20):
         return [], 0
 
 # ==========================================
-# [분석 로직] Median Ratio 필터
+# [분석 로직] Median Ratio 필터로 확실한 옥타브 제거
 # ==========================================
 def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
     try:
@@ -456,7 +460,6 @@ if st.session_state.get('is_analyzed'):
     
     if st.button("🚀 진단 결과 확인", key="btn_diag"):
         if model_step1:
-            # 1. Normal Cut-off: Artic >= 78
             if p_artic >= 78:
                 prob_normal, final_decision = 100.0, "Normal"
                 st.success(f"🟢 **정상 음성 (Normal) (100.0%)**")
@@ -465,57 +468,9 @@ if st.session_state.get('is_analyzed'):
                 pred_1 = model_step1.predict(input_1)[0]
                 prob_normal = model_step1.predict_proba(input_1)[0][list(model_step1.classes_).index('Normal') if 'Normal' in model_step1.classes_ else 0] * 100
 
-                # ----------------------------------------------------
-                # [수정된 로직] AI가 정상을 예측했어도, 임상적 이상 징후 체크 (위음성 방지)
-                # ----------------------------------------------------
                 if pred_1 == 'Normal':
-                    is_hidden_pd = False
-                    hidden_reason = ""
-                    
-                    # 1. 강도(Intensity) 체크: 40점 미만이면 심각
-                    if (p_loud < 40) or (final_db < 60.0):
-                        final_decision = "강도 집단 (재조정됨)"
-                        is_hidden_pd = True
-                        hidden_reason = "청지각 강도 저하 또는 기계적 강도 부족"
-                    
-                    # 2. 말속도(Rate) 체크: 4.5 SPS 이상이면 가속
-                    elif (final_sps >= 4.5) or (p_rate >= 70):
-                        final_decision = "말속도 집단 (재조정됨)"
-                        is_hidden_pd = True
-                        hidden_reason = "말속도 가속 감지"
-
-                    if is_hidden_pd:
-                        st.error(f"🔴 **파킨슨 특성 감지:** {final_decision}")
-                        st.warning(f"※ AI는 정상으로 예측했으나, 결정적 임상 지표[{hidden_reason}]가 발견되어 진단이 보정되었습니다.")
-                        
-                        # (정상이지만 PD로 변경된 경우도 스파이더 차트 표시를 위해 PD 로직 태움)
-                        if model_step2:
-                            input_2 = pd.DataFrame([[st.session_state['f0_mean'], range_adj, final_db, final_sps, vhi_total, vhi_p, vhi_f, vhi_e, p_pitch, p_prange, p_loud, p_rate, p_artic]], columns=FEATS_STEP2)
-                            probs_sub = model_step2.predict_proba(input_2)[0]
-                            labels = list(model_step2.classes_)
-                            labels_with_probs = [f"{label}\n({prob*100:.1f}%)" for label, prob in zip(labels, probs_sub)]
-                            
-                            fig_radar = plt.figure(figsize=(3, 3))
-                            ax = fig_radar.add_subplot(111, polar=True)
-                            angles = np.linspace(0, 2 * np.pi, len(labels), endpoint=False).tolist()
-                            angles += angles[:1]
-                            stats = probs_sub.tolist() + [probs_sub[0]]
-                            ax.plot(angles, stats, linewidth=2, linestyle='solid', color='red')
-                            ax.fill(angles, stats, 'red', alpha=0.25)
-                            ax.set_xticks(angles[:-1])
-                            ax.set_xticklabels(labels_with_probs)
-                            
-                            c_chart, c_desc = st.columns([1, 2])
-                            with c_chart: st.pyplot(fig_radar)
-                            with c_desc: st.info(f"💡 특징: {hidden_reason}에 해당합니다.")
-                            
-                    else:
-                        st.success(f"🟢 **정상 음성 (Normal) ({prob_normal:.1f}%)**")
-                        final_decision = "Normal"
-
-                # ----------------------------------------------------
-                # [기존 로직] AI가 파킨슨(PD)으로 예측한 경우 -> 세부 유형 분류
-                # ----------------------------------------------------
+                    st.success(f"🟢 **정상 음성 (Normal) ({prob_normal:.1f}%)**")
+                    final_decision = "Normal"
                 else:
                     if model_step2:
                         input_2 = pd.DataFrame([[st.session_state['f0_mean'], range_adj, final_db, final_sps, vhi_total, vhi_p, vhi_f, vhi_e, p_pitch, p_prange, p_loud, p_rate, p_artic]], columns=FEATS_STEP2)
@@ -523,7 +478,6 @@ if st.session_state.get('is_analyzed'):
                         probs_sub = model_step2.predict_proba(input_2)[0]
                         
                         ratio_e = vhi_e / 8.0
-                        ratio_p = vhi_p / 12.0
                         
                         # [심각도 점수 경쟁]
                         score_rate = 0
@@ -550,6 +504,7 @@ if st.session_state.get('is_analyzed'):
                         is_override = False
                         reason = ""
                         
+                        # [NEW] AI 확률 추출
                         idx_loud = list(model_step2.classes_).index('강도 집단') if '강도 집단' in model_step2.classes_ else -1
                         idx_artic = list(model_step2.classes_).index('조음 집단') if '조음 집단' in model_step2.classes_ else -1
                         prob_loud = probs_sub[idx_loud] if idx_loud != -1 else 0
@@ -557,6 +512,8 @@ if st.session_state.get('is_analyzed'):
 
                         if max_score >= 2:
                             is_override = True
+                            
+                            # [Tie-Breaker: 동점 시 AI 확률 우선]
                             if (score_loud == max_score) and (score_artic == max_score):
                                 if prob_artic > prob_loud:
                                     final_decision = "조음 집단 (재조정됨 - AI확률 반영)"
