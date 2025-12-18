@@ -24,7 +24,7 @@ from sklearn.ensemble import RandomForestClassifier
 from scipy.signal import find_peaks
 
 # --- 페이지 기본 설정 ---
-st.set_page_config(page_title="PD 음성 데이터 수집 시스템 (V2.8)", layout="wide")
+st.set_page_config(page_title="PD 음성 데이터 수집 시스템 (V2.9)", layout="wide")
 
 # ==========================================
 # [설정] 구글 시트 정보 (Secrets)
@@ -131,7 +131,6 @@ except: model_step1, model_step2 = None, None
 # ==========================================
 def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
     try:
-        # 1. 구글 스프레드시트 기록
         creds = service_account.Credentials.from_service_account_info(
             st.secrets["gcp_service_account"],
             scopes=['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
@@ -142,7 +141,6 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_name = patient_info['name'].replace(" ", "")
-        # 시트에는 고유성 유지를 위해 타임스탬프 포함된 파일명 기록
         log_filename = f"{safe_name}_{patient_info['age']}_{patient_info['gender']}_{timestamp}.wav"
 
         if not worksheet.row_values(1):
@@ -164,7 +162,6 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         ]
         worksheet.append_row(row_data)
 
-        # 2. 이메일 전송
         sender = st.secrets["email"]["sender"]
         password = st.secrets["email"]["password"]
         receiver = st.secrets["email"]["receiver"]
@@ -214,10 +211,8 @@ def auto_detect_smr_events(sound_path, top_n=20):
         intensity = sound.to_intensity(time_step=0.005)
         times = intensity.xs()
         values = intensity.values[0, :]
-        
         inv_vals = -values
         peaks, properties = find_peaks(inv_vals, prominence=5, distance=40)
-        
         candidates = []
         for p_idx in peaks:
             time_point = times[p_idx]
@@ -227,7 +222,6 @@ def auto_detect_smr_events(sound_path, top_n=20):
             local_max = np.max(values[start_search:end_search])
             depth = local_max - v_int
             candidates.append({"time": time_point, "depth": depth})
-            
         candidates.sort(key=lambda x: x['time'])
         return candidates, len(candidates)
     except:
@@ -260,9 +254,7 @@ def run_analysis_logic(file_path):
         intensity = sound.to_intensity()
         mean_db = call(intensity, "Get mean", 0, 0, "energy")
         sps = st.session_state.user_syllables / dur if dur > 0 else 0
-        
         smr_events, smr_count = auto_detect_smr_events(file_path)
-        
         st.session_state.update({
             'f0_mean': f0, 'pitch_range': rng, 'mean_db': mean_db, 
             'sps': sps, 'duration': dur, 'fig_plotly': fig, 
@@ -290,7 +282,7 @@ def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e):
 
 # --- UI Title ---
 st.title("📂 파킨슨 환자 교육 및 음성 데이터 수집 시스템")
-st.markdown("Version 2.8 (Final - SMR Fix & Email Name)")
+st.markdown("Version 2.9 (UI Optimized)")
 
 # 1. 사이드바
 with st.sidebar:
@@ -310,7 +302,6 @@ TEMP_FILENAME = "temp_for_analysis.wav"
 with col_rec:
     st.markdown("#### 🎙️ 마이크 녹음")
     font_size = st.slider("🔍 글자 크기", 15, 50, 28, key="fs_read")
-    
     read_opt = st.radio("📖 낭독 문단 선택", ["1. 산책 (일반용 - 69음절)", "2. 바닷가의 추억 (SMR/정밀용 - 80음절)"])
     
     def styled_text(text, size): 
@@ -330,7 +321,6 @@ with col_rec:
         default_syl = 69
         
     st.markdown(styled_text(read_text, font_size), unsafe_allow_html=True)
-    
     syllables_rec = st.number_input("전체 음절 수", 1, 500, default_syl, key="syl_rec")
     st.session_state.user_syllables = syllables_rec
     
@@ -357,8 +347,13 @@ with col_up:
 if st.session_state.get('is_analyzed'):
     st.markdown("---")
     st.subheader("2. 분석 결과 및 보정")
+    
+    # [수정됨] SMR 표를 넓게 쓰기 위해 컬럼 분리
     c1, c2 = st.columns([2, 1])
-    with c1: st.plotly_chart(st.session_state['fig_plotly'], use_container_width=True)
+    
+    with c1: 
+        st.plotly_chart(st.session_state['fig_plotly'], use_container_width=True)
+    
     with c2:
         db_adj = st.slider("강도(dB) 보정", -50.0, 50.0, -10.0)
         final_db = st.session_state['mean_db'] + db_adj
@@ -375,23 +370,25 @@ if st.session_state.get('is_analyzed'):
         })
         st.dataframe(result_df, hide_index=True)
 
-        if st.session_state.get('smr_events'):
-            st.markdown("##### 🔎 SMR 자동 분석 (단어 매칭)")
-            events = st.session_state['smr_events']
-            smr_df_data = {} # 딕셔너리로 변경
-            words = ["바닷가", "파도가", "무지개", "바둑이", "보트가", "버터구이", "포토카드", "부탁해", "돋보기", "빈대떡"]
-            
-            for i, word in enumerate(words):
-                if i < len(events):
-                    ev = events[i]
-                    status = "🟢 양호" if ev['depth'] >= 20 else ("🟡 주의" if ev['depth'] >= 15 else "🔴 불량")
-                    val = f"{ev['depth']:.1f}dB\n{status}"
-                else:
-                    val = "미감지"
-                smr_df_data[word] = [val]
-            
-            # [수정됨] 가로로 긴 DataFrame 생성 및 use_container_width 사용
-            st.dataframe(pd.DataFrame(smr_df_data), use_container_width=True)
+    # [수정됨] SMR 표를 컬럼 밖으로 빼서 가로로 길게 배치 (꽉 찬 화면)
+    st.markdown("---")
+    if st.session_state.get('smr_events'):
+        st.markdown("##### 🔎 SMR 자동 분석 (단어 매칭)")
+        events = st.session_state['smr_events']
+        smr_df_data = {}
+        words = ["바닷가", "파도가", "무지개", "바둑이", "보트가", "버터구이", "포토카드", "부탁해", "돋보기", "빈대떡"]
+        
+        for i, word in enumerate(words):
+            if i < len(events):
+                ev = events[i]
+                status = "🟢 양호" if ev['depth'] >= 20 else ("🟡 주의" if ev['depth'] >= 15 else "🔴 불량")
+                val = f"{ev['depth']:.1f}dB\n{status}"
+            else:
+                val = "미감지"
+            smr_df_data[word] = [val]
+        
+        # 가로로 긴 데이터프레임 (use_container_width=True)
+        st.dataframe(pd.DataFrame(smr_df_data), use_container_width=True)
 
     st.markdown("---")
     st.subheader("3. 청지각 및 VHI-10 입력")
@@ -482,7 +479,6 @@ if st.session_state.get('is_analyzed'):
                             elif "말속도" in final_decision: st.info("💡 특징: 말이 빠르거나 리듬이 불규칙하며, 정서적 불안감이 동반될 수 있습니다.")
                             else: st.info("💡 특징: 발음이 뭉개지고 정확도가 떨어집니다.")
                             
-                            # [추가됨] 차트와 결과 불일치에 대한 안내
                             if "재조정됨" in final_decision:
                                 st.warning("※ 참고: 스파이더 차트는 AI 모델의 예측 확률(강도 집단 우세 등)을 보여주나, 최종 진단은 임상 지표(말속도 가속 등)가 우선 적용되어 재조정되었습니다.")
 
