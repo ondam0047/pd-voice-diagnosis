@@ -24,7 +24,7 @@ from sklearn.ensemble import RandomForestClassifier
 from scipy.signal import find_peaks
 
 # --- 페이지 기본 설정 ---
-st.set_page_config(page_title="파킨슨병 환자 하위유형 분류 프로그램", layout="wide")
+st.set_page_config(page_title="PD 음성 데이터 수집 시스템 (V2.9)", layout="wide")
 
 # ==========================================
 # [설정] 구글 시트 정보 (Secrets)
@@ -127,7 +127,7 @@ try: model_step1, model_step2 = train_models()
 except: model_step1, model_step2 = None, None
 
 # ==========================================
-# [이메일 전송 함수]
+# [이메일 전송 함수] 파일명 수정 (이름.wav)
 # ==========================================
 def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
     try:
@@ -170,6 +170,7 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         msg['From'] = sender
         msg['To'] = receiver
         
+        # [수정] 이메일 첨부 파일명: 홍길동.wav
         email_attach_name = f"{safe_name}.wav"
         msg['Subject'] = f"[PD Data] {email_attach_name}"
 
@@ -227,7 +228,7 @@ def auto_detect_smr_events(sound_path, top_n=20):
         return [], 0
 
 # ==========================================
-# [분석 로직] 자동 정규화 적용 (Target Peak: 75dB)
+# [분석 로직] Version 1.0
 # ==========================================
 def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
     try:
@@ -251,30 +252,11 @@ def run_analysis_logic(file_path):
         fig, f0, rng, dur = plot_pitch_contour_plotly(file_path, 75, 300)
         sound = parselmouth.Sound(file_path)
         intensity = sound.to_intensity()
-        
-        # [자동 보정 알고리즘]
-        # 1. 현재 오디오의 최대 피크(Max Intensity)를 측정
-        current_max_db = call(intensity, "Get maximum", 0, 0, "Parabolic")
-        
-        # 2. 목표 피크(Target Peak)를 75dB(일반 대화 최대 수준)로 설정
-        target_peak_db = 75.0
-        
-        # 3. 보정값(Adjustment) 계산
-        # 예: 현재 60dB면 +15dB, 현재 85dB면 -10dB
-        auto_adjustment = target_peak_db - current_max_db
-        
-        # 4. 평균 강도(Mean dB) 구하고 보정값 적용
-        raw_mean_db = call(intensity, "Get mean", 0, 0, "energy")
-        final_auto_db = raw_mean_db + auto_adjustment
-        
+        mean_db = call(intensity, "Get mean", 0, 0, "energy")
         sps = st.session_state.user_syllables / dur if dur > 0 else 0
         smr_events, smr_count = auto_detect_smr_events(file_path)
-        
         st.session_state.update({
-            'f0_mean': f0, 'pitch_range': rng, 
-            'mean_db': final_auto_db,   # 자동 보정된 DB 저장
-            'raw_mean_db': raw_mean_db, # 원본 DB (참고용)
-            'db_adjustment': auto_adjustment, # 보정된 수치
+            'f0_mean': f0, 'pitch_range': rng, 'mean_db': mean_db, 
             'sps': sps, 'duration': dur, 'fig_plotly': fig, 
             'smr_events': smr_events, 'smr_count': smr_count,
             'is_analyzed': True, 'is_saved': False
@@ -299,8 +281,8 @@ def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e):
     return positives, negatives
 
 # --- UI Title ---
-st.title("파킨슨병 환자 하위유형 분류 프로그램")
-st.markdown("이 프로그램은 청지각적 평가, 음향학적 분석, 자가보고(VHI-10) 데이터를 통합하여 파킨슨병 환자의 음성 특성을 3가지 하위 유형으로 분류합니다.")
+st.title("📂 파킨슨 환자 교육 및 음성 데이터 수집 시스템")
+st.markdown("Version 2.9 (UI Optimized)")
 
 # 1. 사이드바
 with st.sidebar:
@@ -366,29 +348,29 @@ if st.session_state.get('is_analyzed'):
     st.markdown("---")
     st.subheader("2. 분석 결과 및 보정")
     
+    # [수정됨] SMR 표를 넓게 쓰기 위해 컬럼 분리
     c1, c2 = st.columns([2, 1])
     
     with c1: 
         st.plotly_chart(st.session_state['fig_plotly'], use_container_width=True)
     
     with c2:
-        # [변경됨] 수동 슬라이더 삭제됨 -> 자동 보정 알림 표시
-        st.info(f"💡 **강도 자동 보정 완료**\n\n최대 피크를 75dB로 가정하고, 평균 강도를 **{st.session_state['mean_db']:.2f}dB**로 자동 정규화했습니다. (보정치: {st.session_state['db_adjustment']:.2f}dB)")
-        
-        # 나머지 보정 기능 유지
+        db_adj = st.slider("강도(dB) 보정", -50.0, 50.0, -10.0)
+        final_db = st.session_state['mean_db'] + db_adj
         range_adj = st.slider("음도범위(Hz) 보정", 0.0, 300.0, float(st.session_state['pitch_range']))
         s_time, e_time = st.slider("말속도 구간(초)", 0.0, st.session_state['duration'], (0.0, st.session_state['duration']), 0.01)
         sel_dur = max(0.1, e_time - s_time)
         final_sps = st.session_state.user_syllables / sel_dur
-        final_db = st.session_state['mean_db'] # 자동 보정된 값 사용
         
         st.write("#### 📊 음향학적 분석 결과")
+        # [수정됨] SMR(회) 삭제
         result_df = pd.DataFrame({
             "항목": ["평균 강도(dB)", "평균 음도(Hz)", "음도 범위(Hz)", "말속도(SPS)"],
             "수치": [f"{final_db:.2f}", f"{st.session_state['f0_mean']:.2f}", f"{range_adj:.2f}", f"{final_sps:.2f}"]
         })
         st.dataframe(result_df, hide_index=True)
 
+    # [수정됨] SMR 표를 컬럼 밖으로 빼서 가로로 길게 배치 (꽉 찬 화면)
     st.markdown("---")
     if st.session_state.get('smr_events'):
         st.markdown("##### 🔎 SMR 자동 분석 (단어 매칭)")
@@ -404,6 +386,8 @@ if st.session_state.get('is_analyzed'):
             else:
                 val = "미감지"
             smr_df_data[word] = [val]
+        
+        # 가로로 긴 데이터프레임 (use_container_width=True)
         st.dataframe(pd.DataFrame(smr_df_data), use_container_width=True)
 
     st.markdown("---")
