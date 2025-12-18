@@ -24,6 +24,7 @@ from sklearn.ensemble import RandomForestClassifier
 from scipy.signal import find_peaks
 
 # --- 페이지 기본 설정 ---
+# [수정됨] 브라우저 탭 제목도 함께 변경
 st.set_page_config(page_title="파킨슨병 환자 하위유형 분류 프로그램", layout="wide")
 
 # ==========================================
@@ -56,7 +57,7 @@ def setup_korean_font():
 setup_korean_font()
 
 # ==========================================
-# 0. 머신러닝 모델 학습
+# 0. 머신러닝 모델 학습 (Version 1.0)
 # ==========================================
 @st.cache_resource
 def train_models():
@@ -127,7 +128,7 @@ try: model_step1, model_step2 = train_models()
 except: model_step1, model_step2 = None, None
 
 # ==========================================
-# [이메일 전송 함수]
+# [이메일 전송 함수] 이름.wav
 # ==========================================
 def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
     try:
@@ -329,13 +330,14 @@ def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e):
     if db >= 60: positives.append(f"평균 음성 강도가 {db:.1f} dB로, 일반적인 대화 수준(60dB 이상)의 성량을 튼튼하게 유지하고 있습니다.")
 
     if db < 60: negatives.append(f"평균 음성 강도가 {db:.1f} dB로 다소 작습니다. 이는 파킨슨병의 대표적 증상인 '강도 감소(Hypophonia)'와 유사하여 발성 훈련이 필요할 수 있습니다.")
-    if sps >= 4.5: negatives.append(f"말속도가 {sps:.2f} SPS로 지나치게 빠릅니다. 이는 발화 제어가 어려워 말이 빨라지는 가속 징후(Short rushes of speech)일 가능성이 있습니다.")
+    if sps >= 4.5: negatives.append(f"말속도가 {sps:.2f} SPS로 지나치게 빠릅니다. 이는 발화 제어가 어려워 말이 빠르지는 가속 징후(Short rushes of speech)일 가능성이 있습니다.")
     if artic < 70: negatives.append(f"청지각적 조음 정확도가 {artic}점으로 다소 낮습니다. 발음이 불분명해지는 조음 장애(Dysarthria) 징후가 관찰됩니다.")
     if vhi >= 20: negatives.append(f"VHI 총점이 {vhi}점으로 높습니다. 환자 스스로 음성 문제로 인한 생활의 불편함과 심리적 위축을 크게 느끼고 있습니다.")
     if vhi_e >= 5: negatives.append("특히 VHI 정서(E) 점수가 높아, 말하기에 대한 불안감이나 자신감 저하가 감지됩니다.")
     return positives, negatives
 
 # --- UI Title ---
+# [수정됨] 제목 및 설명 변경
 st.title("파킨슨병 환자 하위유형 분류 프로그램")
 st.markdown("이 프로그램은 청지각적 평가, 음향학적 분석, 자가보고(VHI-10) 데이터를 통합하여 파킨슨병 환자의 음성 특성을 3가지 하위 유형으로 분류합니다.")
 
@@ -409,14 +411,12 @@ if st.session_state.get('is_analyzed'):
         st.plotly_chart(st.session_state['fig_plotly'], use_container_width=True)
     
     with c2:
-        # [변경됨] 수동 슬라이더 삭제됨 -> 자동 보정 알림 표시
-        st.info(f"💡 **강도 자동 보정 완료**\n\n최대 피크를 75dB로 가정하고, 평균 강도를 **{st.session_state['mean_db']:.2f}dB**로 자동 정규화했습니다.")
-        
+        db_adj = st.slider("강도(dB) 보정", -50.0, 50.0, -10.0)
+        final_db = st.session_state['mean_db'] + db_adj
         range_adj = st.slider("음도범위(Hz) 보정", 0.0, 300.0, float(st.session_state['pitch_range']))
         s_time, e_time = st.slider("말속도 구간(초)", 0.0, st.session_state['duration'], (0.0, st.session_state['duration']), 0.01)
         sel_dur = max(0.1, e_time - s_time)
         final_sps = st.session_state.user_syllables / sel_dur
-        final_db = st.session_state['mean_db']
         
         st.write("#### 📊 음향학적 분석 결과")
         result_df = pd.DataFrame({
