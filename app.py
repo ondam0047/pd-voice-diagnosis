@@ -282,7 +282,7 @@ def run_analysis_logic(file_path):
         fig, f0, rng, dur = plot_pitch_contour_plotly(file_path, 70, 500)
         sound = parselmouth.Sound(file_path)
         intensity = sound.to_intensity()
-        mean_db = call(intensity, "Get mean", 0, 0, "energy") # [복구됨] 순수 평균 dB
+        mean_db = call(intensity, "Get mean", 0, 0, "energy") # 순수 평균 dB
         sps = st.session_state.user_syllables / dur if dur > 0 else 0
         smr_events, smr_count = auto_detect_smr_events(file_path)
         
@@ -305,7 +305,7 @@ def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e):
     if db >= 60: positives.append(f"평균 음성 강도가 {db:.1f} dB로, 일반적인 대화 수준(60dB 이상)의 성량을 튼튼하게 유지하고 있습니다.")
 
     if db < 60: negatives.append(f"평균 음성 강도가 {db:.1f} dB로 다소 작습니다. 이는 파킨슨병의 대표적 증상인 '강도 감소(Hypophonia)'와 유사하여 발성 훈련이 필요할 수 있습니다.")
-    if sps >= 4.5: negatives.append(f"말속도가 {sps:.2f} SPS로 지나치게 빠릅니다. 이는 발화 제어가 어려워 말이 빨라지는 가속 징후(Short rushes of speech)일 가능성이 있습니다.")
+    if sps >= 4.5: negatives.append(f"말속도가 {sps:.2f} SPS로 지나치게 빠릅니다. 이는 발화 제어가 어려워 말이 빠르지는 가속 징후(Short rushes of speech)일 가능성이 있습니다.")
     if artic < 70: negatives.append(f"청지각적 조음 정확도가 {artic}점으로 다소 낮습니다. 발음이 불분명해지는 조음 장애(Dysarthria) 징후가 관찰됩니다.")
     if vhi >= 20: negatives.append(f"VHI 총점이 {vhi}점으로 높습니다. 환자 스스로 음성 문제로 인한 생활의 불편함과 심리적 위축을 크게 느끼고 있습니다.")
     if vhi_e >= 5: negatives.append("특히 VHI 정서(E) 점수가 높아, 말하기에 대한 불안감이나 자신감 저하가 감지됩니다.")
