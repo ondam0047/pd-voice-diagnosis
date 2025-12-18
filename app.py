@@ -24,7 +24,7 @@ from sklearn.ensemble import RandomForestClassifier
 from scipy.signal import find_peaks
 
 # --- 페이지 기본 설정 ---
-st.set_page_config(page_title="파킨슨병 환자 하위유형 분류 프로그램", layout="wide")
+st.set_page_config(page_title="PD 음성 데이터 수집 시스템 (V2.9)", layout="wide")
 
 # ==========================================
 # [설정] 구글 시트 정보 (Secrets)
@@ -170,6 +170,7 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         msg['From'] = sender
         msg['To'] = receiver
         
+        # [수정] 이메일 첨부 파일명: 홍길동.wav
         email_attach_name = f"{safe_name}.wav"
         msg['Subject'] = f"[PD Data] {email_attach_name}"
 
@@ -227,7 +228,7 @@ def auto_detect_smr_events(sound_path, top_n=20):
         return [], 0
 
 # ==========================================
-# [분석 로직] 백분위수(Percentile) 필터로 확실한 제거
+# [분석 로직] Version 1.0
 # ==========================================
 def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
     try:
@@ -236,56 +237,24 @@ def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
         pitch_vals = np.array(pitch.selected_array['frequency'], dtype=np.float64)
         duration = sound.get_total_duration()
         times = np.linspace(0, duration, len(pitch_vals))
-        
-        # 1. 0(무성음) 제외
-        valid_mask = pitch_vals > 0
-        valid_p = pitch_vals[valid_mask]
-        valid_t = times[valid_mask]
-        
-        clean_p = []
-        clean_t = []
-        mean_f0 = 0
-        rng = 0
-
-        # 2. [변경됨] 상위 5%, 하위 5% 강제 절사 (확실한 이상치 제거)
-        if len(valid_p) > 0:
-            # 5번째, 95번째 백분위수 계산
-            p05 = np.percentile(valid_p, 5)
-            p95 = np.percentile(valid_p, 95)
-            
-            # 범위 밖의 값은 가차없이 버림
-            clean_mask = (valid_p >= p05) & (valid_p <= p95)
-            clean_p = valid_p[clean_mask]
-            clean_t = valid_t[clean_mask]
-            
-            if len(clean_p) > 0:
-                mean_f0 = np.mean(clean_p)
-                rng = np.max(clean_p) - np.min(clean_p)
-        
+        valid_idx = pitch_vals != 0
+        valid_t, valid_p = times[valid_idx], pitch_vals[valid_idx]
+        if len(valid_p) > 0: mean_f0, rng = np.mean(valid_p), np.max(valid_p) - np.min(valid_p)
+        else: mean_f0, rng = 0, 0
         fig = go.Figure()
-        
-        if len(clean_p) > 0:
-            fig.add_trace(go.Scatter(x=clean_t, y=clean_p, mode='markers', marker=dict(size=4, color='red'), name='Pitch'))
-            # 그래프 범위도 잘라낸 데이터에 맞춰서 깔끔하게 조정
-            y_min = max(0, np.min(clean_p) - 20)
-            y_max = np.max(clean_p) + 20
-            fig.update_layout(title="음도 컨투어 (이상치 5% 절사됨)", xaxis_title="Time(s)", yaxis_title="Hz", height=300, yaxis=dict(range=[y_min, y_max]))
-        else:
-            fig.update_layout(title="음도 컨투어 (감지된 음성 없음)", height=300)
-
+        fig.add_trace(go.Scatter(x=valid_t, y=valid_p, mode='markers', marker=dict(size=4, color='red'), name='Pitch'))
+        fig.update_layout(title="음도 컨투어", xaxis_title="Time(s)", yaxis_title="Hz", height=300, yaxis=dict(range=[0, 350]))
         return fig, mean_f0, rng, duration
     except: return None, 0, 0, 0
 
 def run_analysis_logic(file_path):
     try:
-        # [설정] 분석 범위는 넓게(500) 잡고, 내부에서 백분위수로 자름
-        fig, f0, rng, dur = plot_pitch_contour_plotly(file_path, 70, 500)
+        fig, f0, rng, dur = plot_pitch_contour_plotly(file_path, 75, 300)
         sound = parselmouth.Sound(file_path)
         intensity = sound.to_intensity()
         mean_db = call(intensity, "Get mean", 0, 0, "energy")
         sps = st.session_state.user_syllables / dur if dur > 0 else 0
         smr_events, smr_count = auto_detect_smr_events(file_path)
-        
         st.session_state.update({
             'f0_mean': f0, 'pitch_range': rng, 'mean_db': mean_db, 
             'sps': sps, 'duration': dur, 'fig_plotly': fig, 
@@ -312,8 +281,8 @@ def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e):
     return positives, negatives
 
 # --- UI Title ---
-st.title("파킨슨병 환자 하위유형 분류 프로그램")
-st.markdown("이 프로그램은 청지각적 평가, 음향학적 분석, 자가보고(VHI-10) 데이터를 통합하여 파킨슨병 환자의 음성 특성을 3가지 하위 유형으로 분류합니다.")
+st.title("📂 파킨슨 환자 교육 및 음성 데이터 수집 시스템")
+st.markdown("Version 2.9 (UI Optimized)")
 
 # 1. 사이드바
 with st.sidebar:
@@ -379,28 +348,29 @@ if st.session_state.get('is_analyzed'):
     st.markdown("---")
     st.subheader("2. 분석 결과 및 보정")
     
+    # [수정됨] SMR 표를 넓게 쓰기 위해 컬럼 분리
     c1, c2 = st.columns([2, 1])
     
     with c1: 
         st.plotly_chart(st.session_state['fig_plotly'], use_container_width=True)
     
     with c2:
-        # [변경됨] 수동 슬라이더 삭제됨 -> 자동 보정 알림 표시
-        st.info(f"💡 **강도 자동 보정 완료**\n\n최대 피크를 75dB로 가정하고, 평균 강도를 **{st.session_state['mean_db']:.2f}dB**로 자동 정규화했습니다.")
-        
+        db_adj = st.slider("강도(dB) 보정", -50.0, 50.0, -10.0)
+        final_db = st.session_state['mean_db'] + db_adj
         range_adj = st.slider("음도범위(Hz) 보정", 0.0, 300.0, float(st.session_state['pitch_range']))
         s_time, e_time = st.slider("말속도 구간(초)", 0.0, st.session_state['duration'], (0.0, st.session_state['duration']), 0.01)
         sel_dur = max(0.1, e_time - s_time)
         final_sps = st.session_state.user_syllables / sel_dur
-        final_db = st.session_state['mean_db']
         
         st.write("#### 📊 음향학적 분석 결과")
+        # [수정됨] SMR(회) 삭제
         result_df = pd.DataFrame({
             "항목": ["평균 강도(dB)", "평균 음도(Hz)", "음도 범위(Hz)", "말속도(SPS)"],
             "수치": [f"{final_db:.2f}", f"{st.session_state['f0_mean']:.2f}", f"{range_adj:.2f}", f"{final_sps:.2f}"]
         })
         st.dataframe(result_df, hide_index=True)
 
+    # [수정됨] SMR 표를 컬럼 밖으로 빼서 가로로 길게 배치 (꽉 찬 화면)
     st.markdown("---")
     if st.session_state.get('smr_events'):
         st.markdown("##### 🔎 SMR 자동 분석 (단어 매칭)")
@@ -417,6 +387,7 @@ if st.session_state.get('is_analyzed'):
                 val = "미감지"
             smr_df_data[word] = [val]
         
+        # 가로로 긴 데이터프레임 (use_container_width=True)
         st.dataframe(pd.DataFrame(smr_df_data), use_container_width=True)
 
     st.markdown("---")
