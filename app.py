@@ -277,7 +277,6 @@ def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
 
 def run_analysis_logic(file_path):
     try:
-        # [설정] 분석 범위 70~500Hz 전달 -> 내부에서 Median Ratio 필터 적용
         fig, f0, rng, dur = plot_pitch_contour_plotly(file_path, 70, 500)
         sound = parselmouth.Sound(file_path)
         intensity = sound.to_intensity()
@@ -332,8 +331,6 @@ TEMP_FILENAME = "temp_for_analysis.wav"
 with col_rec:
     st.markdown("#### 🎙️ 마이크 녹음")
     font_size = st.slider("🔍 글자 크기", 15, 50, 28, key="fs_read")
-    
-    # [수정] 문단 변경 시 UI 리렌더링을 위해 key 사용
     read_opt = st.radio("📖 낭독 문단 선택", ["1. 산책 (일반용 - 69음절)", "2. 바닷가의 추억 (SMR/정밀용 - 80음절)"])
     
     def styled_text(text, size): 
@@ -347,8 +344,6 @@ with col_rec:
         default_syl = 69
         
     st.markdown(styled_text(read_text, font_size), unsafe_allow_html=True)
-    
-    # [수정] 음절 수 자동 변경 (key에 read_opt 포함)
     syllables_rec = st.number_input("전체 음절 수", 1, 500, default_syl, key=f"syl_rec_{read_opt}")
     st.session_state.user_syllables = syllables_rec
     
@@ -382,7 +377,6 @@ if st.session_state.get('is_analyzed'):
         st.plotly_chart(st.session_state['fig_plotly'], use_container_width=True)
     
     with c2:
-        # [복구됨] 수동 강도 보정
         db_adj = st.slider("강도(dB) 보정", -50.0, 50.0, -10.0)
         final_db = st.session_state['mean_db'] + db_adj
         
@@ -459,7 +453,8 @@ if st.session_state.get('is_analyzed'):
     
     if st.button("🚀 진단 결과 확인", key="btn_diag"):
         if model_step1:
-            if p_artic >= 78 and vhi_total < 12:
+            # [수정] 통계적 Cut-off 적용 (Normal: Artic >= 78)
+            if p_artic >= 78:
                 prob_normal, final_decision = 100.0, "Normal"
                 st.success(f"🟢 **정상 음성 (Normal) (100.0%)**")
             else:
@@ -476,13 +471,30 @@ if st.session_state.get('is_analyzed'):
                         final_decision = model_step2.predict(input_2)[0]
                         probs_sub = model_step2.predict_proba(input_2)[0]
                         
-                        is_rate_feature = False
-                        if vhi_e/8.0 >= 0.55: is_rate_feature = True
-                        if final_sps >= 4.5: is_rate_feature = True 
+                        # [수정] 통계적 Cut-off 기반 재조정 로직
+                        reason = ""
+                        is_override = False
                         
-                        if is_rate_feature and "말속도" not in final_decision: final_decision = "말속도 집단 (재조정됨)"
-                        if final_db < 60.0 and "강도" not in final_decision: final_decision = "강도 집단 (재조정됨)"
-                        if vhi_total < 15 and p_artic < 60 and "조음" not in final_decision: final_decision = "조음 집단 (재조정됨)"
+                        # 1. 말속도 집단: Rate > 65 OR Rate < 40 OR SPS >= 4.5
+                        if (p_rate >= 65 or p_rate < 40 or final_sps >= 4.5):
+                            if "말속도" not in final_decision:
+                                final_decision = "말속도 집단 (재조정됨)"
+                                reason = "말속도 가속 (4.5 SPS 이상) 또는 청지각 속도 부적절"
+                                is_override = True
+                        
+                        # 2. 강도 집단: Loudness < 40 OR dB < 60
+                        if not is_override and (p_loud < 40 or final_db < 60.0):
+                            if "강도" not in final_decision:
+                                final_decision = "강도 집단 (재조정됨)"
+                                reason = "강도 저하 (60dB 미만 또는 청지각 40점 미만)"
+                                is_override = True
+                                
+                        # 3. 조음 집단: Articulation < 50
+                        if not is_override and (p_artic < 50):
+                            if "조음" not in final_decision:
+                                final_decision = "조음 집단 (재조정됨)"
+                                reason = "조음 정확도 저하 (50점 미만)"
+                                is_override = True
                         
                         st.error(f"🔴 **파킨슨 특성 감지:** {final_decision}")
                         
@@ -505,14 +517,9 @@ if st.session_state.get('is_analyzed'):
                             elif "말속도" in final_decision: st.info("💡 특징: 말이 빠르거나 리듬이 불규칙하며, 정서적 불안감이 동반될 수 있습니다.")
                             else: st.info("💡 특징: 발음이 뭉개지고 정확도가 떨어집니다.")
                             
-                            # [수정] 재조정 이유 동적 표시
-                            if "재조정됨" in final_decision:
-                                reason_text = "임상 지표"
-                                if "강도" in final_decision: reason_text = "강도 저하(60dB 미만)"
-                                elif "말속도" in final_decision: reason_text = "말속도 가속(4.5 SPS 이상)"
-                                elif "조음" in final_decision: reason_text = "조음 정확도 저하"
-                                
-                                st.warning(f"※ 참고: 스파이더 차트는 AI 모델의 예측 확률을 보여주나, 최종 진단은 중요 임상 지표[{reason_text}]가 우선 적용되어 재조정되었습니다.")
+                            # [수정] 재조정 이유 상세 표시
+                            if is_override:
+                                st.warning(f"※ 참고: AI 모델 예측과 달리, 중요 임상 지표 [{reason}]가 우선 적용되어 최종 진단이 보정되었습니다.")
 
                     else: final_decision = "Parkinson (Subtype Model Error)"
 
