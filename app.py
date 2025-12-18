@@ -91,7 +91,6 @@ def train_models():
                     raw_p = row.get('VHI_신체', 0)
                     raw_f = row.get('VHI_기능', 0)
                     raw_e = row.get('VHI_정서', 0)
-                    # VHI-30 데이터 호환 (40점 초과 시 가중치 적용)
                     if raw_total > 40: 
                         vhi_f = (raw_f / 40.0) * 20.0
                         vhi_p = (raw_p / 40.0) * 12.0
@@ -234,35 +233,34 @@ def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
     try:
         sound = parselmouth.Sound(sound_path)
         pitch = call(sound, "To Pitch", 0.0, f0_min, f0_max)
-        pitch_array = pitch.selected_array['frequency']
-        pitch_values = np.array(pitch_array, dtype=np.float64)
+        pitch_vals = np.array(pitch.selected_array['frequency'], dtype=np.float64)
         duration = sound.get_total_duration()
-        n_points = len(pitch_values)
-        time_array = np.linspace(0, duration, n_points)
+        times = np.linspace(0, duration, len(pitch_vals))
         
-        valid_indices = pitch_values != 0
-        valid_times = time_array[valid_indices]
-        valid_pitch = pitch_values[valid_indices]
+        # 1. 0(무성음) 제외
+        valid_mask = pitch_vals > 0
+        valid_p = pitch_vals[valid_mask]
+        valid_t = times[valid_mask]
+        
+        clean_p = []
+        clean_t = []
+        mean_f0 = 0
+        rng = 0
 
-        if len(valid_pitch) > 0:
-            median_f0 = np.median(valid_pitch)
+        # 2. [핵심] 중앙값 대비 비율 필터 (Octave Jump 제거)
+        if len(valid_p) > 0:
+            median_f0 = np.median(valid_p)
             lower_bound = median_f0 * 0.6
             upper_bound = median_f0 * 1.6
             
-            clean_mask = (valid_pitch >= lower_bound) & (valid_pitch <= upper_bound)
-            clean_p = valid_pitch[clean_mask]
-            clean_t = valid_times[clean_mask]
+            clean_mask = (valid_p >= lower_bound) & (valid_p <= upper_bound)
+            clean_p = valid_p[clean_mask]
+            clean_t = valid_t[clean_mask]
             
             if len(clean_p) > 0:
                 mean_f0 = np.mean(clean_p)
                 rng = np.max(clean_p) - np.min(clean_p)
-            else:
-                mean_f0, rng = 0, 0
-                clean_p, clean_t = [], []
-        else:
-            clean_p, clean_t = [], []
-            mean_f0, rng = 0, 0
-
+        
         fig = go.Figure()
         if len(clean_p) > 0:
             fig.add_trace(go.Scatter(x=clean_t, y=clean_p, mode='markers', marker=dict(size=4, color='red'), name='Pitch'))
@@ -331,6 +329,8 @@ TEMP_FILENAME = "temp_for_analysis.wav"
 with col_rec:
     st.markdown("#### 🎙️ 마이크 녹음")
     font_size = st.slider("🔍 글자 크기", 15, 50, 28, key="fs_read")
+    
+    # 문단 선택 (Key 부여로 리렌더링 유도)
     read_opt = st.radio("📖 낭독 문단 선택", ["1. 산책 (일반용 - 69음절)", "2. 바닷가의 추억 (SMR/정밀용 - 80음절)"])
     
     def styled_text(text, size): 
@@ -344,6 +344,8 @@ with col_rec:
         default_syl = 69
         
     st.markdown(styled_text(read_text, font_size), unsafe_allow_html=True)
+    
+    # 음절 수 (자동 변경)
     syllables_rec = st.number_input("전체 음절 수", 1, 500, default_syl, key=f"syl_rec_{read_opt}")
     st.session_state.user_syllables = syllables_rec
     
@@ -472,40 +474,51 @@ if st.session_state.get('is_analyzed'):
                         probs_sub = model_step2.predict_proba(input_2)[0]
                         
                         # [VHI Ratio 계산]
-                        ratio_f = vhi_f / 20.0
-                        ratio_p = vhi_p / 12.0
                         ratio_e = vhi_e / 8.0
+                        ratio_p = vhi_p / 12.0
                         
-                        reason = ""
+                        # ====================================================
+                        # [핵심] 경쟁적 스코어링 (Scoring Competition)
+                        # ====================================================
+                        score_rate = 0
+                        score_loud = 0
+                        score_artic = 0
+                        
+                        # 1. 말속도 점수 (Rate)
+                        if final_sps >= 5.0: score_rate += 3      # 매우 심각
+                        elif final_sps >= 4.5: score_rate += 2    # 심각
+                        if p_rate >= 70 or p_rate <= 30: score_rate += 2
+                        if ratio_e >= 0.75: score_rate += 1       # 정서적 요인
+                        
+                        # 2. 강도 점수 (Loudness)
+                        if final_db <= 55.0: score_loud += 3      # 매우 심각
+                        elif final_db <= 60.0: score_loud += 2    # 심각
+                        if p_loud <= 30: score_loud += 3          # 청지각 매우 심각
+                        elif p_loud <= 50: score_loud += 2
+                        
+                        # 3. 조음 점수 (Articulation)
+                        if p_artic <= 30: score_artic += 3        # 청지각 매우 심각
+                        elif p_artic <= 50: score_artic += 2
+                        
+                        # [승자 결정] 가장 높은 점수 획득한 그룹 선정
+                        max_score = max(score_rate, score_loud, score_artic)
+                        
                         is_override = False
+                        reason = ""
                         
-                        # [중요] VHI 가중치 기반 재조정 로직 (User Logic)
-                        
-                        # 1. 말속도 집단 (Rate)
-                        # 조건: 정서(E) 비율이 75% 이상(6점 이상) OR (기계적 가속 or 청지각 가속/감속)
-                        if (ratio_e >= 0.75) or (final_sps >= 4.5) or (p_rate >= 65) or (p_rate < 40):
-                            if "말속도" not in final_decision:
+                        # 점수가 2점 이상일 때만 Override 발동 (사소한 건 무시)
+                        if max_score >= 2:
+                            is_override = True
+                            if score_loud == max_score:
+                                # 동점일 경우 강도를 최우선 (치료 시급성)
+                                final_decision = "강도 집단 (재조정됨)"
+                                reason = f"강도 심각도 {score_loud}점 (최고점)"
+                            elif score_artic == max_score:
+                                final_decision = "조음 집단 (재조정됨)"
+                                reason = f"조음 심각도 {score_artic}점 (최고점)"
+                            else:
                                 final_decision = "말속도 집단 (재조정됨)"
-                                reason = "정서적 불안(E점수 높음) 또는 말속도 이상"
-                                is_override = True
-                        
-                        # 2. 강도 집단 (Intensity)
-                        # 조건: 신체(P) 불편함 우세 & 정서(E) 낮음 OR 강도 저하
-                        if not is_override:
-                            if (ratio_p > 0.5 and ratio_e < 0.5) or (final_db < 60.0) or (p_loud < 40):
-                                if "강도" not in final_decision:
-                                    final_decision = "강도 집단 (재조정됨)"
-                                    reason = "신체적 발성 제한 또는 강도 저하"
-                                    is_override = True
-                        
-                        # 3. 조음 집단 (Articulation)
-                        # 조건: VHI 총점은 낮은데(15점 미만) 조음 정확도만 떨어짐
-                        if not is_override:
-                            if (vhi_total < 15 and p_artic < 50): # Paradoxical pattern
-                                if "조음" not in final_decision:
-                                    final_decision = "조음 집단 (재조정됨)"
-                                    reason = "자각 증상(VHI) 경미하나 조음 정확도 저하"
-                                    is_override = True
+                                reason = f"말속도 심각도 {score_rate}점 (최고점)"
                         
                         st.error(f"🔴 **파킨슨 특성 감지:** {final_decision}")
                         
@@ -529,7 +542,7 @@ if st.session_state.get('is_analyzed'):
                             else: st.info("💡 특징: 발음이 뭉개지고 정확도가 떨어집니다.")
                             
                             if is_override:
-                                st.warning(f"※ 참고: AI 모델 예측과 달리, 중요 임상 지표 및 VHI 패턴[{reason}]이 우선 적용되어 최종 진단이 보정되었습니다.")
+                                st.warning(f"※ 참고: AI 예측과 달리, 증상 심각도 경쟁[{reason}]을 통해 최종 진단이 보정되었습니다.")
 
                     else: final_decision = "Parkinson (Subtype Model Error)"
 
