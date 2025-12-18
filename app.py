@@ -24,7 +24,7 @@ from sklearn.ensemble import RandomForestClassifier
 from scipy.signal import find_peaks
 
 # --- 페이지 기본 설정 ---
-st.set_page_config(page_title="PD 음성 데이터 수집 시스템 (V2.7)", layout="wide")
+st.set_page_config(page_title="PD 음성 데이터 수집 시스템 (V2.8)", layout="wide")
 
 # ==========================================
 # [설정] 구글 시트 정보 (Secrets)
@@ -127,7 +127,7 @@ try: model_step1, model_step2 = train_models()
 except: model_step1, model_step2 = None, None
 
 # ==========================================
-# [이메일 전송 함수] 이름.wav 로 변경
+# [이메일 전송 함수] 파일명 수정 (이름.wav)
 # ==========================================
 def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
     try:
@@ -142,7 +142,7 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_name = patient_info['name'].replace(" ", "")
-        # 시트에는 고유성 유지를 위해 타임스탬프 포함
+        # 시트에는 고유성 유지를 위해 타임스탬프 포함된 파일명 기록
         log_filename = f"{safe_name}_{patient_info['age']}_{patient_info['gender']}_{timestamp}.wav"
 
         if not worksheet.row_values(1):
@@ -164,7 +164,7 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         ]
         worksheet.append_row(row_data)
 
-        # 2. 이메일 전송 (사용자 요청: 이름.wav)
+        # 2. 이메일 전송
         sender = st.secrets["email"]["sender"]
         password = st.secrets["email"]["password"]
         receiver = st.secrets["email"]["receiver"]
@@ -178,10 +178,11 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         msg['Subject'] = f"[PD Data] {email_attach_name}"
 
         body = f"""
-        환자: {patient_info['name']}
-        진단: {diagnosis['final']}
+        환자: {patient_info['name']} ({patient_info['age']}/{patient_info['gender']})
+        진단: {diagnosis['final']} ({diagnosis['normal_prob']:.1f}%)
         
-        * {email_attach_name} 파일이 첨부되었습니다.
+        * 음성 파일이 첨부되었습니다. ({email_attach_name})
+        * 상세 수치는 구글 시트에 저장되었습니다.
         """
         msg.attach(MIMEText(body, 'plain'))
 
@@ -199,7 +200,7 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         server.sendmail(sender, receiver, msg.as_string())
         server.quit()
         
-        return True, "메일 전송 완료 (시트 저장 포함)"
+        return True, "메일 전송 및 시트 저장 완료"
 
     except Exception as e:
         return False, str(e)
@@ -289,7 +290,7 @@ def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e):
 
 # --- UI Title ---
 st.title("📂 파킨슨 환자 교육 및 음성 데이터 수집 시스템")
-st.markdown("Version 2.7 (Final Refine)")
+st.markdown("Version 2.8 (Final - SMR Fix & Email Name)")
 
 # 1. 사이드바
 with st.sidebar:
@@ -377,16 +378,20 @@ if st.session_state.get('is_analyzed'):
         if st.session_state.get('smr_events'):
             st.markdown("##### 🔎 SMR 자동 분석 (단어 매칭)")
             events = st.session_state['smr_events']
-            smr_df_data = []
+            smr_df_data = {} # 딕셔너리로 변경
             words = ["바닷가", "파도가", "무지개", "바둑이", "보트가", "버터구이", "포토카드", "부탁해", "돋보기", "빈대떡"]
             
-            for i, ev in enumerate(events):
-                label = words[i] if i < len(words) else f"구간 {i+1}"
-                status = "🟢 양호" if ev['depth'] >= 20 else ("🟡 주의" if ev['depth'] >= 15 else "🔴 불량")
-                smr_df_data.append({"단어": label, "폐쇄 깊이(dB)": f"{ev['depth']:.1f}", "상태": status})
+            for i, word in enumerate(words):
+                if i < len(events):
+                    ev = events[i]
+                    status = "🟢 양호" if ev['depth'] >= 20 else ("🟡 주의" if ev['depth'] >= 15 else "🔴 불량")
+                    val = f"{ev['depth']:.1f}dB\n{status}"
+                else:
+                    val = "미감지"
+                smr_df_data[word] = [val]
             
-            # [수정됨] use_container_width=True 로 가로 확장
-            st.dataframe(pd.DataFrame(smr_df_data).T, use_container_width=True)
+            # [수정됨] 가로로 긴 DataFrame 생성 및 use_container_width 사용
+            st.dataframe(pd.DataFrame(smr_df_data), use_container_width=True)
 
     st.markdown("---")
     st.subheader("3. 청지각 및 VHI-10 입력")
@@ -477,9 +482,9 @@ if st.session_state.get('is_analyzed'):
                             elif "말속도" in final_decision: st.info("💡 특징: 말이 빠르거나 리듬이 불규칙하며, 정서적 불안감이 동반될 수 있습니다.")
                             else: st.info("💡 특징: 발음이 뭉개지고 정확도가 떨어집니다.")
                             
-                            # [추가됨] 차트와 결과 불일치 설명
+                            # [추가됨] 차트와 결과 불일치에 대한 안내
                             if "재조정됨" in final_decision:
-                                st.caption("※ 참고: 스파이더 차트는 AI 모델의 예측 확률을 보여줍니다. 최종 진단은 중요 임상 지표(SPS 등)에 의해 보정되었습니다.")
+                                st.warning("※ 참고: 스파이더 차트는 AI 모델의 예측 확률(강도 집단 우세 등)을 보여주나, 최종 진단은 임상 지표(말속도 가속 등)가 우선 적용되어 재조정되었습니다.")
 
                     else: final_decision = "Parkinson (Subtype Model Error)"
 
