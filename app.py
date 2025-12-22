@@ -60,6 +60,37 @@ def sex_to_num(x):
     """성별을 숫자 feature로 변환: 남/M=1.0, 여/F=0.0, 그 외/결측=0.5"""
     if x is None:
         return 0.5
+
+
+# ==========================================
+# [training_data 위치 탐색]
+# - Streamlit Cloud/Linux는 대소문자 구분 + 실행 경로가 달라질 수 있어
+#   app.py(이 파일) 기준으로 training_data.*를 찾도록 합니다.
+# ==========================================
+MODEL_LOAD_ERROR = ""
+
+def get_training_file():
+    base = Path(__file__).resolve().parent
+    # 우선순위: xlsx > csv (같은 폴더)
+    candidates = [
+        base / "training_data.xlsx",
+        base / "training_data.csv",
+        base / "Training_data.xlsx",
+        base / "Training_data.csv",
+        base / "TRAINING_DATA.xlsx",
+        base / "TRAINING_DATA.csv",
+    ]
+    for p in candidates:
+        if p.exists():
+            return p
+
+    # 혹시 하위 폴더에 있을 경우(마지막 안전장치)
+    for p in base.rglob("training_data.csv"):
+        return p
+    for p in base.rglob("training_data.xlsx"):
+        return p
+    return None
+
     s = str(x).strip().lower()
     if s in ["남", "남성", "남자", "m", "male", "man", "1"]:
         return 1.0
@@ -90,10 +121,13 @@ def compute_cutoffs_from_training(_file_mtime=None):
     - Step1: 이항 로지스틱(PD 확률) + Youden cut-off
     - Step2: (PD 내부) 정규화 QDA(reg_param) 확률 + 클래스별(OVR) Youden cut-off
     """
-    DATA_FILE = "training_data.csv"
-    target_file = "training_data.xlsx" if os.path.exists("training_data.xlsx") else DATA_FILE
-    if not os.path.exists(target_file):
+    training_path = get_training_file()
+    if training_path is None:
+        global MODEL_LOAD_ERROR
+        MODEL_LOAD_ERROR = "training_data.csv/xlsx 파일을 찾지 못했습니다. app.py와 같은 폴더(레포 루트)에 training_data.csv를 두고 커밋했는지 확인하세요."
         return None
+
+    target_file = training_path
 
     loaders = [
         (lambda f: pd.read_excel(f), "excel"),
@@ -353,10 +387,13 @@ def train_models():
     - Step1: 이항 로지스틱(정상 vs PD)
     - Step2: 정규화 QDA(PD 하위집단 3분류)
     """
-    DATA_FILE = "training_data.csv"
-    target_file = "training_data.xlsx" if os.path.exists("training_data.xlsx") else DATA_FILE
-    if not os.path.exists(target_file):
+    training_path = get_training_file()
+    if training_path is None:
+        global MODEL_LOAD_ERROR
+        MODEL_LOAD_ERROR = "training_data.csv/xlsx 파일을 찾지 못했습니다. app.py와 같은 폴더(레포 루트)에 training_data.csv를 두고 커밋했는지 확인하세요."
         return None, None
+
+    target_file = training_path
 
     loaders = [
         (lambda f: pd.read_excel(f), "excel"),
@@ -463,13 +500,16 @@ def train_models():
     return model_step1, model_step2
 
 
-try: model_step1, model_step2 = train_models()
-except: model_step1, model_step2 = None, None
+try:
+    model_step1, model_step2 = train_models()
+except Exception as e:
+    MODEL_LOAD_ERROR = f"모델 학습 중 예외: {type(e).__name__}: {e}"
+    model_step1, model_step2 = None, None
 
 # training_data 기반 cut-off(확률 임계값) 자동 산출
 try:
-    _tf = "training_data.xlsx" if os.path.exists("training_data.xlsx") else "training_data.csv"
-    _mt = os.path.getmtime(_tf) if os.path.exists(_tf) else None
+    _tp = get_training_file()
+    _mt = float(_tp.stat().st_mtime) if _tp is not None else None
     CUTS = compute_cutoffs_from_training(_mt)
 except Exception:
     CUTS = None
@@ -920,7 +960,7 @@ if st.session_state.get('is_analyzed'):
             st.session_state.is_saved = False
 
         else:
-            st.error("모델 로드 실패")
+            st.error(f"모델 로드 실패: {MODEL_LOAD_ERROR or 'training_data 파일/컬럼/인코딩을 확인하세요.'}")
 
 # 전송 버튼
 st.markdown("---")
