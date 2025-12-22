@@ -911,12 +911,15 @@ if st.session_state.get('is_analyzed'):
                 if p_pd >= pd_cut:
                     st.error(f"🔴 **파킨슨 가능성 (PD) ({p_pd*100:.1f}%)**  | cut-off={pd_cut:.2f}")
                     if model_step2:
-                        input_2 = pd.DataFrame([[
-                            st.session_state['f0_mean'], range_adj, final_db, final_sps,
-                            vhi_total, vhi_p, vhi_f, vhi_e,
-                            sex_num_ui,
-                            p_pitch, p_prange, p_loud, p_rate, p_artic
-                        ]], columns=FEATS_STEP2)
+                        # Step2 입력(feature 축소 버전) — FEATS_STEP2에 맞춰 값만 구성
+                        feat_map2 = {
+                            'Intensity': final_db,
+                            'SPS': final_sps,
+                            'P_Loudness': p_loud,
+                            'P_Rate': p_rate,
+                            'P_Artic': p_artic,
+                        }
+                        input_2 = pd.DataFrame([[feat_map2.get(c, None) for c in FEATS_STEP2]], columns=FEATS_STEP2)
 
                         probs_sub = model_step2.predict_proba(input_2)[0]
                         sub_classes = list(model_step2.classes_)
