@@ -386,120 +386,111 @@ setup_korean_font()
 
 @st.cache_resource
 def train_models():
-    """
-    training_data.csv/xlsx로부터 모델 학습
-    - Step1: 이항 로지스틱(정상 vs PD)
-    - Step2: 정규화 QDA(PD 하위집단 3분류)
-    """
+    """training_data로 Step1/Step2 모델을 학습합니다."""
+    global MODEL_LOAD_ERROR
+
     training_path = get_training_file()
     if training_path is None:
-        global MODEL_LOAD_ERROR
-        MODEL_LOAD_ERROR = "training_data.csv/xlsx 파일을 찾지 못했습니다. app.py와 같은 폴더(레포 루트)에 training_data.csv를 두고 커밋했는지 확인하세요."
+        MODEL_LOAD_ERROR = "training_data.csv/xlsx 파일을 찾지 못했습니다."
         return None, None
 
-    target_file = training_path
-
-    loaders = [
-        (lambda f: pd.read_excel(f), "excel"),
-        (lambda f: pd.read_csv(f, encoding='utf-8'), "utf-8"),
-        (lambda f: pd.read_csv(f, encoding='cp949'), "cp949"),
-        (lambda f: pd.read_csv(f, encoding='euc-kr'), "euc-kr")
-    ]
-    df_raw = None
-    for loader, _ in loaders:
-        try:
-            df_raw = loader(target_file)
-            if df_raw is not None and not df_raw.empty:
-                break
-        except Exception:
-            continue
-    if df_raw is None or df_raw.empty:
+    try:
+        if str(training_path).lower().endswith(".xlsx"):
+            raw = pd.read_excel(training_path)
+        else:
+            raw = pd.read_csv(training_path, encoding="utf-8-sig")
+    except Exception as e:
+        MODEL_LOAD_ERROR = f"training_data 로드 실패: {type(e).__name__}: {e}"
         return None, None
 
-    data_list = []
-    for _, row in df_raw.iterrows():
-        label = str(row.get('진단결과 (Label)', 'Normal')).strip()
-        l = label.lower()
-        if 'normal' in l:
-            diagnosis, subgroup = "Normal", "Normal"
-        elif 'pd_intensity' in l:
-            diagnosis, subgroup = "Parkinson", "강도 집단"
-        elif 'pd_rate' in l:
-            diagnosis, subgroup = "Parkinson", "말속도 집단"
-        elif 'pd_articulation' in l:
-            diagnosis, subgroup = "Parkinson", "조음 집단"
-        else:
+    if '진단결과 (Label)' not in raw.columns:
+        MODEL_LOAD_ERROR = "training_data에 '진단결과 (Label)' 컬럼이 없습니다."
+        return None, None
+
+    def _label_to_diag_and_sub(lab: str):
+        s = str(lab).strip().lower()
+        if 'normal' in s:
+            return "Normal", "Normal"
+        if 'pd_intensity' in s:
+            return "Parkinson", "강도 집단"
+        if 'pd_rate' in s:
+            return "Parkinson", "말속도 집단"
+        if 'pd_articulation' in s or 'pd_artic' in s:
+            return "Parkinson", "조음 집단"
+        return None, None
+
+    # ---------- Step1 ----------
+    X1_rows, y1 = [], []
+    for _, row in raw.iterrows():
+        diag, _sub = _label_to_diag_and_sub(row.get('진단결과 (Label)', ''))
+        if diag is None:
             continue
 
-        raw_total = pd.to_numeric(row.get('VHI총점', 0), errors="coerce")
-        raw_p = pd.to_numeric(row.get('VHI_신체', 0), errors="coerce")
-        raw_f = pd.to_numeric(row.get('VHI_기능', 0), errors="coerce")
-        raw_e = pd.to_numeric(row.get('VHI_정서', 0), errors="coerce")
-        raw_total = float(0 if pd.isna(raw_total) else raw_total)
-        raw_p = float(0 if pd.isna(raw_p) else raw_p)
-        raw_f = float(0 if pd.isna(raw_f) else raw_f)
-        raw_e = float(0 if pd.isna(raw_e) else raw_e)
+        raw_total = pd.to_numeric(row.get('VHI총점', np.nan), errors="coerce")
+        raw_p = pd.to_numeric(row.get('VHI_신체', np.nan), errors="coerce")
+        raw_f = pd.to_numeric(row.get('VHI_기능', np.nan), errors="coerce")
+        raw_e = pd.to_numeric(row.get('VHI_정서', np.nan), errors="coerce")
 
-        # VHI는 UI에서 VHI-10(0~40) 기반으로 입력되므로,
-        # training_data의 VHI-30(총점 0~120, 하위척도 0~40)을 VHI-10 스케일로 변환해 사용합니다.
-        # UI에서 계산하는 분해(기능 0~20 / 신체 0~12 / 정서 0~8)와 동일하게 맞춥니다.
-        if raw_total <= 40 and raw_f <= 20 and raw_p <= 12 and raw_e <= 8:
-            vhi_total, vhi_p, vhi_f, vhi_e = raw_total, raw_p, raw_f, raw_e
+        if (pd.notna(raw_total) and raw_total <= 40) and (pd.notna(raw_f) and raw_f <= 20) and (pd.notna(raw_p) and raw_p <= 12) and (pd.notna(raw_e) and raw_e <= 8):
+            vhi_total, vhi_p, vhi_f, vhi_e = float(raw_total), float(raw_p), float(raw_f), float(raw_e)
         else:
-            vhi_f = (raw_f / 40.0) * 20.0
-            vhi_p = (raw_p / 40.0) * 12.0
-            vhi_e = (raw_e / 40.0) * 8.0
+            vhi_f = (0 if pd.isna(raw_f) else float(raw_f)) / 40.0 * 20.0
+            vhi_p = (0 if pd.isna(raw_p) else float(raw_p)) / 40.0 * 12.0
+            vhi_e = (0 if pd.isna(raw_e) else float(raw_e)) / 40.0 * 8.0
             vhi_total = vhi_f + vhi_p + vhi_e
 
         sex_num = sex_to_num(row.get('성별', None))
 
-        data_list.append([
-            row.get('F0', 0), row.get('Range', 0), row.get('강도(dB)', 0), row.get('SPS', 0),
-            vhi_total, vhi_p, vhi_f, vhi_e, sex_num,
-            row.get('음도(청지각)', 0), row.get('음도범위(청지각)', 0), row.get('강도(청지각)', 0),
-            row.get('말속도(청지각)', 0), row.get('조음정확도(청지각)', 0),
-            diagnosis, subgroup
+        X1_rows.append([
+            row.get('F0', np.nan),
+            row.get('Range', np.nan),
+            row.get('강도(dB)', np.nan),
+            row.get('SPS', np.nan),
+            vhi_total, vhi_p, vhi_f, vhi_e,
+            sex_num
         ])
+        y1.append(1 if diag == "Parkinson" else 0)
 
-    df = pd.DataFrame(data_list, columns=FEATS_STEP2 + ['Diagnosis', 'Subgroup'])
-    for col in FEATS_STEP2:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
+    X1 = np.array(X1_rows, dtype=float)
+    y1 = np.array(y1, dtype=int)
 
-    # 결측 처리
-    for col in ['F0', 'Range', 'Intensity', 'SPS',
-                'P_Pitch', 'P_Range', 'P_Loudness', 'P_Rate', 'P_Artic', 'Sex']:
-        if col in df.columns:
-            df[col] = df[col].fillna(df[col].mean())
-    for col in ['VHI_Total', 'VHI_P', 'VHI_F', 'VHI_E']:
-        if col in df.columns:
-            df[col] = df[col].fillna(0.0)
+    from sklearn.pipeline import Pipeline
+    from sklearn.impute import SimpleImputer
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.linear_model import LogisticRegression
 
-    # Step1
-    X1 = df[FEATS_STEP1].copy().to_numpy().to_numpy()
-    y1 = df["Diagnosis"].astype(str).values
     model_step1 = Pipeline([
-        ("imputer", SimpleImputer(strategy="median")),
-        ("scaler", StandardScaler()),
-        ("clf", LogisticRegression(
-            solver="lbfgs",
-            max_iter=5000,
-            class_weight="balanced",
-            random_state=42
-        ))
+        ("imp", SimpleImputer(strategy="median")),
+        ("sc", StandardScaler()),
+        ("clf", LogisticRegression(max_iter=4000, class_weight="balanced"))
     ])
     model_step1.fit(X1, y1)
 
-    # Step2 (PD 내부)
-    df_pd = df[df["Diagnosis"] == "Parkinson"].copy()
-    if df_pd.empty:
-        return model_step1, None
+    # ---------- Step2 (PD only) ----------
+    X2_rows, y2 = [], []
+    for _, row in raw.iterrows():
+        diag, sub = _label_to_diag_and_sub(row.get('진단결과 (Label)', ''))
+        if diag != "Parkinson" or sub == "Normal":
+            continue
 
-    X2 = df_pd[FEATS_STEP2].copy().to_numpy().to_numpy()
-    y2 = df_pd["Subgroup"].astype(str).values
+        X2_rows.append([
+            row.get('강도(dB)', np.nan),              # Intensity
+            row.get('SPS', np.nan),                   # SPS
+            row.get('강도(청지각)', np.nan),          # P_Loudness
+            row.get('말속도(청지각)', np.nan),        # P_Rate
+            row.get('조음정확도(청지각)', np.nan)     # P_Artic
+        ])
+        y2.append(sub)
+
+    X2 = np.array(X2_rows, dtype=float)
+    y2 = np.array(y2, dtype=object)
+
+    from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+
     model_step2 = Pipeline([
-        ("imputer", SimpleImputer(strategy="median")),
-        ("scaler", StandardScaler()),
-        ("clf", LinearDiscriminantAnalysis(solver='eigen', shrinkage='auto'))
+        ("imp", SimpleImputer(strategy="median")),
+        ("sc", StandardScaler()),
+        ("clf", LinearDiscriminantAnalysis(solver="eigen", shrinkage="auto"))
     ])
     model_step2.fit(X2, y2)
 
