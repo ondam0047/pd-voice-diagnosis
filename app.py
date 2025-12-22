@@ -20,8 +20,6 @@ from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
 from email import encoders
 
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import StratifiedKFold
 from sklearn.metrics import confusion_matrix, roc_curve
 
 import sqlite3
@@ -30,6 +28,13 @@ import json
 from pathlib import Path
 
 from scipy.signal import find_peaks
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
+from sklearn.model_selection import LeaveOneOut
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import Pipeline
+
 
 # --- 페이지 기본 설정 ---
 st.set_page_config(page_title="파킨슨병 환자 하위유형 분류 프로그램", layout="wide")
@@ -64,8 +69,27 @@ def sex_to_num(x):
 
 
 @st.cache_resource
-def compute_cutoffs_from_training():
-    """training_data.csv/xlsx로부터 Step1/Step2 확률 cut-off를 자동 산출 (누수 방지: 5-fold OOF)"""
+
+def _youden_cutoff(y_true, scores):
+    """Youden's J(민감도+특이도-1)를 최대화하는 threshold 반환"""
+    fpr, tpr, thr = roc_curve(y_true, scores)
+    j = tpr - fpr
+    bi = int(np.argmax(j))
+    # sklearn roc_curve의 thr에는 inf가 들어갈 수 있어 방어
+    cut = float(thr[bi]) if np.isfinite(thr[bi]) else 0.5
+    sens = float(tpr[bi])
+    spec = float(1.0 - fpr[bi])
+    return cut, sens, spec
+
+
+@st.cache_data
+def compute_cutoffs_from_training(_file_mtime=None):
+    """
+    training_data.csv/xlsx로부터 Step1/Step2 확률 cut-off를 자동 산출
+    - 누수 방지: Leave-One-Out(LOO) OOF 확률로 cut-off 산정
+    - Step1: 이항 로지스틱(PD 확률) + Youden cut-off
+    - Step2: (PD 내부) 정규화 QDA(reg_param) 확률 + 클래스별(OVR) Youden cut-off
+    """
     DATA_FILE = "training_data.csv"
     target_file = "training_data.xlsx" if os.path.exists("training_data.xlsx") else DATA_FILE
     if not os.path.exists(target_file):
@@ -88,103 +112,148 @@ def compute_cutoffs_from_training():
     if df_raw is None or df_raw.empty:
         return None
 
-    # ---------- build DF ----------
+    # --- 로우 파싱 ---
     data_list = []
     for _, row in df_raw.iterrows():
-        label = str(row.get('진단결과 (Label)', 'Normal')).strip().lower()
-        if 'normal' in label:
+        label = str(row.get('진단결과 (Label)', 'Normal')).strip()
+        l = label.lower()
+        if 'normal' in l:
             diagnosis, subgroup = "Normal", "Normal"
-        elif 'pd_intensity' in label:
+        elif 'pd_intensity' in l:
             diagnosis, subgroup = "Parkinson", "강도 집단"
-        elif 'pd_rate' in label:
+        elif 'pd_rate' in l:
             diagnosis, subgroup = "Parkinson", "말속도 집단"
-        elif 'pd_articulation' in label:
+        elif 'pd_articulation' in l:
             diagnosis, subgroup = "Parkinson", "조음 집단"
         else:
             continue
 
-        raw_total = row.get('VHI총점', 0)
-        raw_p = row.get('VHI_신체', 0)
-        raw_f = row.get('VHI_기능', 0)
-        raw_e = row.get('VHI_정서', 0)
-        if raw_total > 40:
+        raw_total = pd.to_numeric(row.get('VHI총점', 0), errors="coerce")
+        raw_p = pd.to_numeric(row.get('VHI_신체', 0), errors="coerce")
+        raw_f = pd.to_numeric(row.get('VHI_기능', 0), errors="coerce")
+        raw_e = pd.to_numeric(row.get('VHI_정서', 0), errors="coerce")
+        raw_total = float(0 if pd.isna(raw_total) else raw_total)
+        raw_p = float(0 if pd.isna(raw_p) else raw_p)
+        raw_f = float(0 if pd.isna(raw_f) else raw_f)
+        raw_e = float(0 if pd.isna(raw_e) else raw_e)
+
+        # VHI는 UI에서 VHI-10(0~40) 기반으로 입력되므로,
+        # training_data의 VHI-30(총점 0~120, 하위척도 0~40)을 VHI-10 스케일로 변환해 사용합니다.
+        # UI에서 계산하는 분해(기능 0~20 / 신체 0~12 / 정서 0~8)와 동일하게 맞춥니다.
+        if raw_total <= 40 and raw_f <= 20 and raw_p <= 12 and raw_e <= 8:
+            vhi_total, vhi_p, vhi_f, vhi_e = raw_total, raw_p, raw_f, raw_e
+        else:
             vhi_f = (raw_f / 40.0) * 20.0
             vhi_p = (raw_p / 40.0) * 12.0
             vhi_e = (raw_e / 40.0) * 8.0
             vhi_total = vhi_f + vhi_p + vhi_e
-        else:
-            vhi_total, vhi_f, vhi_p, vhi_e = raw_total, raw_f, raw_p, raw_e
 
         sex_num = sex_to_num(row.get('성별', None))
 
         data_list.append([
             row.get('F0', 0), row.get('Range', 0), row.get('강도(dB)', 0), row.get('SPS', 0),
-            vhi_total, vhi_p, vhi_f, vhi_e,
-            sex_num,
+            vhi_total, vhi_p, vhi_f, vhi_e, sex_num,
             row.get('음도(청지각)', 0), row.get('음도범위(청지각)', 0), row.get('강도(청지각)', 0),
             row.get('말속도(청지각)', 0), row.get('조음정확도(청지각)', 0),
             diagnosis, subgroup
         ])
 
     df = pd.DataFrame(data_list, columns=FEATS_STEP2 + ['Diagnosis', 'Subgroup'])
-    for col in FEATS_STEP2[:4]:
-        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(df[col].mean())
-    df[FEATS_STEP1[4:]] = pd.DataFrame(df[FEATS_STEP1[4:]]).apply(pd.to_numeric, errors="coerce").fillna(0.0)
 
-    # ---------- Step1: Normal vs PD cut-off ----------
+    # 숫자 변환/결측 처리
+    for col in FEATS_STEP2:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    # 음향/청지각은 평균으로, VHI는 0으로(입력 누락 대비)
+    for col in ['F0', 'Range', 'Intensity', 'SPS',
+                'P_Pitch', 'P_Range', 'P_Loudness', 'P_Rate', 'P_Artic', 'Sex']:
+        if col in df.columns:
+            df[col] = df[col].fillna(df[col].mean())
+    for col in ['VHI_Total', 'VHI_P', 'VHI_F', 'VHI_E']:
+        if col in df.columns:
+            df[col] = df[col].fillna(0.0)
+
+    # ---------- Step1: Normal vs PD cut-off (LOO OOF) ----------
     X1 = df[FEATS_STEP1].copy()
-    y1 = (df["Diagnosis"] == "Parkinson").astype(int).values
+    y1 = df["Diagnosis"].astype(str).values
 
-    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    oof = np.zeros(len(df), dtype=float)
+    loo = LeaveOneOut()
+    oof_pd = np.zeros(len(df), dtype=float)
 
-    for tr, te in skf.split(X1, y1):
-        m1 = RandomForestClassifier(n_estimators=300, random_state=42)
-        m1.fit(X1.iloc[tr], y1[tr])
-        oof[te] = m1.predict_proba(X1.iloc[te])[:, 1]
+    pipe1 = Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", LogisticRegression(
+            solver="lbfgs",
+            max_iter=5000,
+            class_weight="balanced",
+            random_state=42
+        ))
+    ])
 
-    fpr, tpr, thr = roc_curve(y1, oof)
-    youden = tpr - fpr
-    best = int(np.argmax(youden))
-    step1_cutoff = float(thr[best])
+    for tr, te in loo.split(X1, y1):
+        pipe1.fit(X1.iloc[tr], df['Diagnosis'].iloc[tr].astype(str).values)
+        proba = pipe1.predict_proba(X1.iloc[te])[0]
+        cls = pipe1.named_steps['clf'].classes_
+        pd_idx = int(np.where(cls == 'Parkinson')[0][0]) if 'Parkinson' in cls else -1
+        oof_pd[te[0]] = float(proba[pd_idx]) if pd_idx >= 0 else float(proba[-1])
 
-    # ---------- Step2: PD 3-class cut-offs (OVR Youden) ----------
+    step1_cutoff, step1_sens, step1_spec = _youden_cutoff(y1, oof_pd)
+
+    # ---------- Step2: PD 내부 3집단 cut-off (클래스별 OVR, LOO OOF) ----------
     df_pd = df[df["Diagnosis"] == "Parkinson"].copy()
-    if df_pd.empty:
-        return {"step1_cutoff": step1_cutoff, "step2_cutoff_by_class": {}}
-
-    X2 = df_pd[FEATS_STEP2].copy()
-    y2 = df_pd["Subgroup"].values
-    classes = np.array(["강도 집단", "말속도 집단", "조음 집단"], dtype=object)
-
-    skf2 = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    oof2 = np.zeros((len(df_pd), 3), dtype=float)
-
-    for tr, te in skf2.split(X2, y2):
-        m2 = RandomForestClassifier(n_estimators=400, random_state=42)
-        m2.fit(X2.iloc[tr], y2[tr])
-        proba = m2.predict_proba(X2.iloc[te])
-        order = [list(m2.classes_).index(c) for c in classes if c in list(m2.classes_)]
-        # 안전 처리: 클래스 누락 시
-        proba_aligned = np.zeros((len(te), 3), dtype=float)
-        for j, c in enumerate(classes):
-            if c in list(m2.classes_):
-                proba_aligned[:, j] = proba[:, list(m2.classes_).index(c)]
-        oof2[te] = proba_aligned
-
     cutoff_by_class = {}
-    for i, c in enumerate(classes):
-        y_bin = (y2 == c).astype(int)
-        p = oof2[:, i]
-        if np.all(p == 0):
-            cutoff_by_class[c] = 0.5
-            continue
-        fpr2, tpr2, thr2 = roc_curve(y_bin, p)
-        youden2 = tpr2 - fpr2
-        bi2 = int(np.argmax(youden2))
-        cutoff_by_class[c] = float(thr2[bi2])
+    step2_report = None
 
-    return {"step1_cutoff": step1_cutoff, "step2_cutoff_by_class": cutoff_by_class}
+    if len(df_pd) >= 3:
+        X2 = df_pd[FEATS_STEP2].copy()
+        y2 = df_pd["Subgroup"].astype(str).values
+        classes = np.unique(y2)
+        class_to_idx = {c: i for i, c in enumerate(classes)}
+
+        oof2 = np.zeros((len(df_pd), len(classes)), dtype=float)
+
+        pipe2 = Pipeline([
+            ("scaler", StandardScaler()),
+            ("clf", QuadraticDiscriminantAnalysis(reg_param=0.1))
+        ])
+
+        for tr, te in loo.split(X2, y2):
+            # 혹시라도 특정 fold에서 한 클래스가 사라질 경우를 대비(현 데이터에서는 거의 없음)
+            y_tr = y2[tr]
+            if len(np.unique(y_tr)) < 2:
+                continue
+            pipe2.fit(X2.iloc[tr], y_tr)
+            proba = pipe2.predict_proba(X2.iloc[te])[0]
+            fold_classes = pipe2.named_steps["clf"].classes_
+            for j, c in enumerate(fold_classes):
+                oof2[te[0], class_to_idx[c]] = float(proba[j])
+
+        # 클래스별 OVR Youden cut-off
+        for c in classes:
+            y_bin = (y2 == c).astype(int)
+            p = oof2[:, class_to_idx[c]]
+            if np.all(y_bin == 0) or np.all(y_bin == 1):
+                cutoff_by_class[c] = 0.5
+                continue
+            cut, _, _ = _youden_cutoff(y_bin, p)
+            cutoff_by_class[c] = float(cut)
+
+        # 참고용: LOO 기준 혼동행렬(단순 argmax)
+        y_pred = [classes[int(np.argmax(oof2[i]))] for i in range(len(df_pd))]
+        step2_cm = confusion_matrix(y2, y_pred, labels=list(classes))
+        step2_report = {"classes": list(classes), "confusion_matrix": step2_cm.tolist()}
+
+    # Step1 혼동행렬(확률 cut-off 적용)
+    y_pred1 = (oof_pd >= step1_cutoff).astype(int)
+    step1_cm = confusion_matrix(y1, y_pred1, labels=[0, 1])  # 0=Normal,1=PD
+
+    return {
+        "step1_cutoff": float(step1_cutoff),
+        "step1_sensitivity": float(step1_sens),
+        "step1_specificity": float(step1_spec),
+        "step1_confusion_matrix": step1_cm.tolist(),
+        "step2_cutoff_by_class": cutoff_by_class,
+        "step2_report": step2_report
+    }
 
 
 # ==========================================
@@ -276,80 +345,132 @@ setup_korean_font()
 # ==========================================
 # 0. 머신러닝 모델 학습
 # ==========================================
+
 @st.cache_resource
 def train_models():
+    """
+    training_data.csv/xlsx로부터 모델 학습
+    - Step1: 이항 로지스틱(정상 vs PD)
+    - Step2: 정규화 QDA(PD 하위집단 3분류)
+    """
     DATA_FILE = "training_data.csv"
-    df = None
-    if os.path.exists(DATA_FILE) or os.path.exists("training_data.xlsx"):
-        loaders = [
-            (lambda f: pd.read_excel(f.replace(".csv", ".xlsx")), "excel"),
-            (lambda f: pd.read_csv(f, encoding='utf-8'), "utf-8"),
-            (lambda f: pd.read_csv(f, encoding='cp949'), "cp949"),
-            (lambda f: pd.read_csv(f, encoding='euc-kr'), "euc-kr")
-        ]
-        target_file = "training_data.xlsx" if os.path.exists("training_data.xlsx") else DATA_FILE
-        df_raw = None
-        for loader, enc_name in loaders:
-            try:
-                df_raw = loader(target_file)
-                if df_raw is not None and not df_raw.empty: break
-            except: continue
-        if df_raw is not None:
-            try:
-                data_list = []
-                for _, row in df_raw.iterrows():
-                    label = str(row.get('진단결과 (Label)', 'Normal')).strip()
-                    if 'normal' in label.lower(): diagnosis, subgroup = "Normal", "Normal"
-                    elif 'pd_intensity' in label.lower(): diagnosis, subgroup = "Parkinson", "강도 집단"
-                    elif 'pd_rate' in label.lower(): diagnosis, subgroup = "Parkinson", "말속도 집단"
-                    elif 'pd_articulation' in label.lower(): diagnosis, subgroup = "Parkinson", "조음 집단"
-                    else: continue
+    target_file = "training_data.xlsx" if os.path.exists("training_data.xlsx") else DATA_FILE
+    if not os.path.exists(target_file):
+        return None, None
 
-                    raw_total = row.get('VHI총점', 0)
-                    raw_p = row.get('VHI_신체', 0)
-                    raw_f = row.get('VHI_기능', 0)
-                    raw_e = row.get('VHI_정서', 0)
-                    if raw_total > 40: 
-                        vhi_f = (raw_f / 40.0) * 20.0
-                        vhi_p = (raw_p / 40.0) * 12.0
-                        vhi_e = (raw_e / 40.0) * 8.0
-                        vhi_total = vhi_f + vhi_p + vhi_e
-                    else:
-                        vhi_total, vhi_f, vhi_p, vhi_e = raw_total, raw_f, raw_p, raw_e
-                    
-                    sex_num = sex_to_num(row.get('성별', None))
+    loaders = [
+        (lambda f: pd.read_excel(f), "excel"),
+        (lambda f: pd.read_csv(f, encoding='utf-8'), "utf-8"),
+        (lambda f: pd.read_csv(f, encoding='cp949'), "cp949"),
+        (lambda f: pd.read_csv(f, encoding='euc-kr'), "euc-kr")
+    ]
+    df_raw = None
+    for loader, _ in loaders:
+        try:
+            df_raw = loader(target_file)
+            if df_raw is not None and not df_raw.empty:
+                break
+        except Exception:
+            continue
+    if df_raw is None or df_raw.empty:
+        return None, None
 
-                    data_list.append([
-                        row.get('F0', 0), row.get('Range', 0), row.get('강도(dB)', 0), row.get('SPS', 0),
-                        vhi_total, vhi_p, vhi_f, vhi_e,
-                        sex_num,
-                        row.get('음도(청지각)', 0), row.get('음도범위(청지각)', 0), row.get('강도(청지각)', 0),
-                        row.get('말속도(청지각)', 0), row.get('조음정확도(청지각)', 0),
-                        diagnosis, subgroup
-                    ])
-                df = pd.DataFrame(data_list, columns=FEATS_STEP2 + ['Diagnosis', 'Subgroup'])
-                for col in FEATS_STEP2[:4]: df[col] = df[col].fillna(df[col].mean())
-                df[FEATS_STEP1[4:]] = df[FEATS_STEP1[4:]].fillna(0)
-            except Exception: df = None
+    data_list = []
+    for _, row in df_raw.iterrows():
+        label = str(row.get('진단결과 (Label)', 'Normal')).strip()
+        l = label.lower()
+        if 'normal' in l:
+            diagnosis, subgroup = "Normal", "Normal"
+        elif 'pd_intensity' in l:
+            diagnosis, subgroup = "Parkinson", "강도 집단"
+        elif 'pd_rate' in l:
+            diagnosis, subgroup = "Parkinson", "말속도 집단"
+        elif 'pd_articulation' in l:
+            diagnosis, subgroup = "Parkinson", "조음 집단"
+        else:
+            continue
 
-    if df is None: return None, None
-    model_step1 = RandomForestClassifier(n_estimators=200, random_state=42)
-    model_step1.fit(df[FEATS_STEP1], df['Diagnosis'])
-    df_pd = df[df['Diagnosis'] == 'Parkinson'].copy()
-    if not df_pd.empty:
-        for col in FEATS_STEP2[8:]: df_pd[col] = df_pd[col].fillna(df_pd[col].mean())
-        model_step2 = RandomForestClassifier(n_estimators=200, random_state=42)
-        model_step2.fit(df_pd[FEATS_STEP2], df_pd['Subgroup'])
-    else:
-        model_step2 = None
+        raw_total = pd.to_numeric(row.get('VHI총점', 0), errors="coerce")
+        raw_p = pd.to_numeric(row.get('VHI_신체', 0), errors="coerce")
+        raw_f = pd.to_numeric(row.get('VHI_기능', 0), errors="coerce")
+        raw_e = pd.to_numeric(row.get('VHI_정서', 0), errors="coerce")
+        raw_total = float(0 if pd.isna(raw_total) else raw_total)
+        raw_p = float(0 if pd.isna(raw_p) else raw_p)
+        raw_f = float(0 if pd.isna(raw_f) else raw_f)
+        raw_e = float(0 if pd.isna(raw_e) else raw_e)
+
+        # VHI는 UI에서 VHI-10(0~40) 기반으로 입력되므로,
+        # training_data의 VHI-30(총점 0~120, 하위척도 0~40)을 VHI-10 스케일로 변환해 사용합니다.
+        # UI에서 계산하는 분해(기능 0~20 / 신체 0~12 / 정서 0~8)와 동일하게 맞춥니다.
+        if raw_total <= 40 and raw_f <= 20 and raw_p <= 12 and raw_e <= 8:
+            vhi_total, vhi_p, vhi_f, vhi_e = raw_total, raw_p, raw_f, raw_e
+        else:
+            vhi_f = (raw_f / 40.0) * 20.0
+            vhi_p = (raw_p / 40.0) * 12.0
+            vhi_e = (raw_e / 40.0) * 8.0
+            vhi_total = vhi_f + vhi_p + vhi_e
+
+        sex_num = sex_to_num(row.get('성별', None))
+
+        data_list.append([
+            row.get('F0', 0), row.get('Range', 0), row.get('강도(dB)', 0), row.get('SPS', 0),
+            vhi_total, vhi_p, vhi_f, vhi_e, sex_num,
+            row.get('음도(청지각)', 0), row.get('음도범위(청지각)', 0), row.get('강도(청지각)', 0),
+            row.get('말속도(청지각)', 0), row.get('조음정확도(청지각)', 0),
+            diagnosis, subgroup
+        ])
+
+    df = pd.DataFrame(data_list, columns=FEATS_STEP2 + ['Diagnosis', 'Subgroup'])
+    for col in FEATS_STEP2:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+
+    # 결측 처리
+    for col in ['F0', 'Range', 'Intensity', 'SPS',
+                'P_Pitch', 'P_Range', 'P_Loudness', 'P_Rate', 'P_Artic', 'Sex']:
+        if col in df.columns:
+            df[col] = df[col].fillna(df[col].mean())
+    for col in ['VHI_Total', 'VHI_P', 'VHI_F', 'VHI_E']:
+        if col in df.columns:
+            df[col] = df[col].fillna(0.0)
+
+    # Step1
+    X1 = df[FEATS_STEP1].copy()
+    y1 = df["Diagnosis"].astype(str).values
+    model_step1 = Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", LogisticRegression(
+            solver="lbfgs",
+            max_iter=5000,
+            class_weight="balanced",
+            random_state=42
+        ))
+    ])
+    model_step1.fit(X1, y1)
+
+    # Step2 (PD 내부)
+    df_pd = df[df["Diagnosis"] == "Parkinson"].copy()
+    if df_pd.empty:
+        return model_step1, None
+
+    X2 = df_pd[FEATS_STEP2].copy()
+    y2 = df_pd["Subgroup"].astype(str).values
+    model_step2 = Pipeline([
+        ("scaler", StandardScaler()),
+        ("clf", QuadraticDiscriminantAnalysis(reg_param=0.1))
+    ])
+    model_step2.fit(X2, y2)
+
     return model_step1, model_step2
+
 
 try: model_step1, model_step2 = train_models()
 except: model_step1, model_step2 = None, None
 
 # training_data 기반 cut-off(확률 임계값) 자동 산출
 try:
-    CUTS = compute_cutoffs_from_training()
+    _tf = "training_data.xlsx" if os.path.exists("training_data.xlsx") else "training_data.csv"
+    _mt = os.path.getmtime(_tf) if os.path.exists(_tf) else None
+    CUTS = compute_cutoffs_from_training(_mt)
 except Exception:
     CUTS = None
 
