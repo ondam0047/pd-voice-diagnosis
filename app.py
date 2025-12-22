@@ -11,12 +11,6 @@ import platform
 import datetime
 import io
 
-import sqlite3
-import hashlib
-import json
-from pathlib import Path
-
-
 # --- 구글 시트 & 이메일 라이브러리 ---
 from google.oauth2 import service_account
 import gspread
@@ -27,6 +21,14 @@ from email.mime.text import MIMEText
 from email import encoders
 
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import confusion_matrix, roc_curve
+
+import sqlite3
+import hashlib
+import json
+from pathlib import Path
+
 from scipy.signal import find_peaks
 
 # --- 페이지 기본 설정 ---
@@ -34,21 +36,228 @@ st.set_page_config(page_title="파킨슨병 환자 하위유형 분류 프로그
 
 # ==========================================
 # [설정] 구글 시트 정보 (Secrets)
-#   - Secrets가 없더라도 앱(분석/DB저장)은 동작하도록 함
 # ==========================================
 HAS_GCP_SECRETS = True
 try:
     SHEET_NAME = st.secrets["gcp_info"]["sheet_name"]
-except Exception:
-    HAS_GCP_SECRETS = False
+except:
+    st.warning("⚠️ Secrets 설정이 없어 구글시트/이메일 전송은 비활성화됩니다. (SQLite 저장은 사용 가능)")
     SHEET_NAME = None
-    st.warning("⚠️ Secrets(gcp/email) 설정이 없어 구글시트/이메일 전송은 비활성화됩니다. (SQLite 저장은 사용 가능)")
+    HAS_GCP_SECRETS = False
 
 # ==========================================
 # [전역 설정] 폰트 및 변수
 # ==========================================
-FEATS_STEP1 = ['F0', 'Range', 'Intensity', 'SPS', 'VHI_Total', 'VHI_P', 'VHI_F', 'VHI_E']
+FEATS_STEP1 = ['F0', 'Range', 'Intensity', 'SPS', 'VHI_Total', 'VHI_P', 'VHI_F', 'VHI_E', 'Sex']
 FEATS_STEP2 = FEATS_STEP1 + ['P_Pitch', 'P_Range', 'P_Loudness', 'P_Rate', 'P_Artic']
+
+def sex_to_num(x):
+    """성별을 숫자 feature로 변환: 남/M=1.0, 여/F=0.0, 그 외/결측=0.5"""
+    if x is None:
+        return 0.5
+    s = str(x).strip().lower()
+    if s in ["남", "남성", "남자", "m", "male", "man", "1"]:
+        return 1.0
+    if s in ["여", "여성", "여자", "f", "female", "woman", "0", "2"]:
+        return 0.0
+    return 0.5
+
+
+@st.cache_resource
+def compute_cutoffs_from_training():
+    """training_data.csv/xlsx로부터 Step1/Step2 확률 cut-off를 자동 산출 (누수 방지: 5-fold OOF)"""
+    DATA_FILE = "training_data.csv"
+    target_file = "training_data.xlsx" if os.path.exists("training_data.xlsx") else DATA_FILE
+    if not os.path.exists(target_file):
+        return None
+
+    loaders = [
+        (lambda f: pd.read_excel(f), "excel"),
+        (lambda f: pd.read_csv(f, encoding='utf-8'), "utf-8"),
+        (lambda f: pd.read_csv(f, encoding='cp949'), "cp949"),
+        (lambda f: pd.read_csv(f, encoding='euc-kr'), "euc-kr")
+    ]
+    df_raw = None
+    for loader, _ in loaders:
+        try:
+            df_raw = loader(target_file)
+            if df_raw is not None and not df_raw.empty:
+                break
+        except Exception:
+            continue
+    if df_raw is None or df_raw.empty:
+        return None
+
+    # ---------- build DF ----------
+    data_list = []
+    for _, row in df_raw.iterrows():
+        label = str(row.get('진단결과 (Label)', 'Normal')).strip().lower()
+        if 'normal' in label:
+            diagnosis, subgroup = "Normal", "Normal"
+        elif 'pd_intensity' in label:
+            diagnosis, subgroup = "Parkinson", "강도 집단"
+        elif 'pd_rate' in label:
+            diagnosis, subgroup = "Parkinson", "말속도 집단"
+        elif 'pd_articulation' in label:
+            diagnosis, subgroup = "Parkinson", "조음 집단"
+        else:
+            continue
+
+        raw_total = row.get('VHI총점', 0)
+        raw_p = row.get('VHI_신체', 0)
+        raw_f = row.get('VHI_기능', 0)
+        raw_e = row.get('VHI_정서', 0)
+        if raw_total > 40:
+            vhi_f = (raw_f / 40.0) * 20.0
+            vhi_p = (raw_p / 40.0) * 12.0
+            vhi_e = (raw_e / 40.0) * 8.0
+            vhi_total = vhi_f + vhi_p + vhi_e
+        else:
+            vhi_total, vhi_f, vhi_p, vhi_e = raw_total, raw_f, raw_p, raw_e
+
+        sex_num = sex_to_num(row.get('성별', None))
+
+        data_list.append([
+            row.get('F0', 0), row.get('Range', 0), row.get('강도(dB)', 0), row.get('SPS', 0),
+            vhi_total, vhi_p, vhi_f, vhi_e,
+            sex_num,
+            row.get('음도(청지각)', 0), row.get('음도범위(청지각)', 0), row.get('강도(청지각)', 0),
+            row.get('말속도(청지각)', 0), row.get('조음정확도(청지각)', 0),
+            diagnosis, subgroup
+        ])
+
+    df = pd.DataFrame(data_list, columns=FEATS_STEP2 + ['Diagnosis', 'Subgroup'])
+    for col in FEATS_STEP2[:4]:
+        df[col] = pd.to_numeric(df[col], errors="coerce").fillna(df[col].mean())
+    df[FEATS_STEP1[4:]] = pd.DataFrame(df[FEATS_STEP1[4:]]).apply(pd.to_numeric, errors="coerce").fillna(0.0)
+
+    # ---------- Step1: Normal vs PD cut-off ----------
+    X1 = df[FEATS_STEP1].copy()
+    y1 = (df["Diagnosis"] == "Parkinson").astype(int).values
+
+    skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    oof = np.zeros(len(df), dtype=float)
+
+    for tr, te in skf.split(X1, y1):
+        m1 = RandomForestClassifier(n_estimators=300, random_state=42)
+        m1.fit(X1.iloc[tr], y1[tr])
+        oof[te] = m1.predict_proba(X1.iloc[te])[:, 1]
+
+    fpr, tpr, thr = roc_curve(y1, oof)
+    youden = tpr - fpr
+    best = int(np.argmax(youden))
+    step1_cutoff = float(thr[best])
+
+    # ---------- Step2: PD 3-class cut-offs (OVR Youden) ----------
+    df_pd = df[df["Diagnosis"] == "Parkinson"].copy()
+    if df_pd.empty:
+        return {"step1_cutoff": step1_cutoff, "step2_cutoff_by_class": {}}
+
+    X2 = df_pd[FEATS_STEP2].copy()
+    y2 = df_pd["Subgroup"].values
+    classes = np.array(["강도 집단", "말속도 집단", "조음 집단"], dtype=object)
+
+    skf2 = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+    oof2 = np.zeros((len(df_pd), 3), dtype=float)
+
+    for tr, te in skf2.split(X2, y2):
+        m2 = RandomForestClassifier(n_estimators=400, random_state=42)
+        m2.fit(X2.iloc[tr], y2[tr])
+        proba = m2.predict_proba(X2.iloc[te])
+        order = [list(m2.classes_).index(c) for c in classes if c in list(m2.classes_)]
+        # 안전 처리: 클래스 누락 시
+        proba_aligned = np.zeros((len(te), 3), dtype=float)
+        for j, c in enumerate(classes):
+            if c in list(m2.classes_):
+                proba_aligned[:, j] = proba[:, list(m2.classes_).index(c)]
+        oof2[te] = proba_aligned
+
+    cutoff_by_class = {}
+    for i, c in enumerate(classes):
+        y_bin = (y2 == c).astype(int)
+        p = oof2[:, i]
+        if np.all(p == 0):
+            cutoff_by_class[c] = 0.5
+            continue
+        fpr2, tpr2, thr2 = roc_curve(y_bin, p)
+        youden2 = tpr2 - fpr2
+        bi2 = int(np.argmax(youden2))
+        cutoff_by_class[c] = float(thr2[bi2])
+
+    return {"step1_cutoff": step1_cutoff, "step2_cutoff_by_class": cutoff_by_class}
+
+
+# ==========================================
+# [SQLite 저장] Secrets가 없어도 저장 가능한 로컬 DB
+# ==========================================
+DB_PATH = os.environ.get("PD_TOOL_DB_PATH", "pd_tool.db")
+
+@st.cache_resource
+def _db_conn():
+    conn = sqlite3.connect(Path(DB_PATH).as_posix(), check_same_thread=False, timeout=30)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL;")
+        conn.execute("PRAGMA synchronous=NORMAL;")
+    except Exception:
+        pass
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS analyses (
+            analysis_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at TEXT NOT NULL,
+            subject_name TEXT,
+            subject_age INTEGER,
+            subject_gender TEXT,
+            wav_filename TEXT,
+            wav_sha256 TEXT,
+            f0 REAL, pitch_range REAL, intensity_db REAL, sps REAL,
+            vhi_total REAL, vhi_p REAL, vhi_f REAL, vhi_e REAL,
+            p_pitch REAL, p_prange REAL, p_loud REAL, p_rate REAL, p_artic REAL,
+            step1_p_pd REAL, step1_p_normal REAL, step1_cutoff REAL,
+            final_decision TEXT, normal_prob REAL
+        );
+    """)
+    conn.commit()
+    return conn
+
+def _sha256_file(path: str) -> str:
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except Exception:
+        return ""
+
+def save_to_sqlite(wav_path: str, patient_info: dict, analysis: dict, diagnosis: dict, step1_meta: dict):
+    conn = _db_conn()
+    now = datetime.datetime.now().isoformat(timespec="seconds")
+    wav_filename = os.path.basename(wav_path) if wav_path else None
+    wav_sha = _sha256_file(wav_path) if wav_path else ""
+    conn.execute(
+        """INSERT INTO analyses(
+            created_at, subject_name, subject_age, subject_gender,
+            wav_filename, wav_sha256,
+            f0, pitch_range, intensity_db, sps,
+            vhi_total, vhi_p, vhi_f, vhi_e,
+            p_pitch, p_prange, p_loud, p_rate, p_artic,
+            step1_p_pd, step1_p_normal, step1_cutoff,
+            final_decision, normal_prob
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);""",
+        (
+            now,
+            str(patient_info.get("name","")).strip() or None,
+            int(patient_info.get("age")) if str(patient_info.get("age","")).strip() != "" else None,
+            str(patient_info.get("gender","")).strip() or None,
+            wav_filename, wav_sha,
+            float(analysis.get("f0",0.0)), float(analysis.get("range",0.0)), float(analysis.get("db",0.0)), float(analysis.get("sps",0.0)),
+            float(analysis.get("vhi_total",0.0)), float(analysis.get("vhi_p",0.0)), float(analysis.get("vhi_f",0.0)), float(analysis.get("vhi_e",0.0)),
+            float(analysis.get("p_pitch",0.0)), float(analysis.get("p_prange",0.0)), float(analysis.get("p_loud",0.0)), float(analysis.get("p_rate",0.0)), float(analysis.get("p_artic",0.0)),
+            float(step1_meta.get("p_pd",0.0)), float(step1_meta.get("p_normal",0.0)), float(step1_meta.get("cutoff",0.5)),
+            str(diagnosis.get("final","")), float(diagnosis.get("normal_prob",0.0))
+        )
+    )
+    conn.commit()
 
 def setup_korean_font():
     system_name = platform.system()
@@ -108,9 +317,12 @@ def train_models():
                     else:
                         vhi_total, vhi_f, vhi_p, vhi_e = raw_total, raw_f, raw_p, raw_e
                     
+                    sex_num = sex_to_num(row.get('성별', None))
+
                     data_list.append([
                         row.get('F0', 0), row.get('Range', 0), row.get('강도(dB)', 0), row.get('SPS', 0),
                         vhi_total, vhi_p, vhi_f, vhi_e,
+                        sex_num,
                         row.get('음도(청지각)', 0), row.get('음도범위(청지각)', 0), row.get('강도(청지각)', 0),
                         row.get('말속도(청지각)', 0), row.get('조음정확도(청지각)', 0),
                         diagnosis, subgroup
@@ -135,12 +347,28 @@ def train_models():
 try: model_step1, model_step2 = train_models()
 except: model_step1, model_step2 = None, None
 
+# training_data 기반 cut-off(확률 임계값) 자동 산출
+try:
+    CUTS = compute_cutoffs_from_training()
+except Exception:
+    CUTS = None
+
 # ==========================================
 # [이메일 전송 함수] 파일명: 이름.wav
 # ==========================================
 def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
-    if not HAS_GCP_SECRETS:
-        return False, "Secrets가 없어 구글시트/이메일 전송이 비활성화되어 있습니다. (SQLite 저장을 사용하세요)"
+    # Secrets가 없으면(또는 시트명이 없으면) 클라우드 전송 대신 SQLite에 저장
+    if not globals().get("HAS_GCP_SECRETS", True) or (SHEET_NAME is None):
+        try:
+            step1_meta = st.session_state.get("save_ready_data", {}).get("step1_meta", st.session_state.get("step1_meta", {}))
+        except Exception:
+            step1_meta = {}
+        try:
+            save_to_sqlite(wav_path, patient_info, analysis, diagnosis, step1_meta)
+            return True, "Secrets 미설정: 구글시트/이메일 대신 SQLite에 저장했습니다."
+        except Exception as e:
+            return False, f"Secrets 미설정 + SQLite 저장 실패: {e}"
+
     try:
         creds = service_account.Credentials.from_service_account_info(
             st.secrets["gcp_service_account"],
@@ -210,8 +438,14 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         server.login(sender, password)
         server.sendmail(sender, receiver, msg.as_string())
         server.quit()
-        
-        return True, "메일 전송 및 시트 저장 완료"
+
+        # (선택) 클라우드 전송 성공 시에도 SQLite에 로그 저장
+        try:
+            step1_meta = st.session_state.get("save_ready_data", {}).get("step1_meta", st.session_state.get("step1_meta", {}))
+            save_to_sqlite(wav_path, patient_info, analysis, diagnosis, step1_meta)
+            return True, "메일/시트 저장 완료 + SQLite 로그 저장 완료"
+        except Exception:
+            return True, "메일 전송 및 시트 저장 완료"
 
     except Exception as e:
         return False, str(e)
@@ -471,117 +705,86 @@ if st.session_state.get('is_analyzed'):
     
     if st.button("🚀 진단 결과 확인", key="btn_diag"):
         if model_step1:
-            if p_artic >= 78:
-                prob_normal, final_decision = 100.0, "Normal"
-                st.success(f"🟢 **정상 음성 (Normal) (100.0%)**")
+            # 성별 feature
+            sex_num_ui = sex_to_num(subject_gender)
+
+            # Step1: PD 확률 cut-off (training_data 기반)
+            pd_cut = 0.5
+            if CUTS and isinstance(CUTS, dict) and "step1_cutoff" in CUTS and CUTS["step1_cutoff"] is not None:
+                pd_cut = float(CUTS["step1_cutoff"])
+
+            # 기본값(저장용)
+            p_pd = 0.0
+            p_norm = 1.0
+
+            # 조음정확도(p_artic) 78점 이상이면 Normal로 강제하던 규칙은 제거했습니다.
+            if False:  # (removed rule)
+                pass
+                
+                
             else:
-                input_1 = pd.DataFrame([[st.session_state['f0_mean'], range_adj, final_db, final_sps, vhi_total, vhi_p, vhi_f, vhi_e]], columns=FEATS_STEP1)
-                pred_1 = model_step1.predict(input_1)[0]
-                prob_normal = model_step1.predict_proba(input_1)[0][list(model_step1.classes_).index('Normal') if 'Normal' in model_step1.classes_ else 0] * 100
+                input_1 = pd.DataFrame([[
+                    st.session_state['f0_mean'], range_adj, final_db, final_sps,
+                    vhi_total, vhi_p, vhi_f, vhi_e,
+                    sex_num_ui
+                ]], columns=FEATS_STEP1)
 
-                if pred_1 == 'Normal':
-                    st.success(f"🟢 **정상 음성 (Normal) ({prob_normal:.1f}%)**")
-                    final_decision = "Normal"
+                proba_1 = model_step1.predict_proba(input_1)[0]
+                classes_1 = list(model_step1.classes_)
+                if "Parkinson" in classes_1:
+                    p_pd = float(proba_1[classes_1.index("Parkinson")])
+                if "Normal" in classes_1:
+                    p_norm = float(proba_1[classes_1.index("Normal")])
                 else:
+                    p_norm = 1.0 - p_pd
+
+                prob_normal = p_norm * 100.0
+
+                # cut-off 기준으로 판정
+                if p_pd >= pd_cut:
+                    st.error(f"🔴 **파킨슨 가능성 (PD) ({p_pd*100:.1f}%)**  | cut-off={pd_cut:.2f}")
                     if model_step2:
-                        input_2 = pd.DataFrame([[st.session_state['f0_mean'], range_adj, final_db, final_sps, vhi_total, vhi_p, vhi_f, vhi_e, p_pitch, p_prange, p_loud, p_rate, p_artic]], columns=FEATS_STEP2)
-                        final_decision = model_step2.predict(input_2)[0]
+                        input_2 = pd.DataFrame([[
+                            st.session_state['f0_mean'], range_adj, final_db, final_sps,
+                            vhi_total, vhi_p, vhi_f, vhi_e,
+                            sex_num_ui,
+                            p_pitch, p_prange, p_loud, p_rate, p_artic
+                        ]], columns=FEATS_STEP2)
+
                         probs_sub = model_step2.predict_proba(input_2)[0]
-                        
-                        ratio_e = vhi_e / 8.0
-                        
-                        # [심각도 점수 경쟁]
-                        score_rate = 0
-                        score_loud = 0
-                        score_artic = 0
-                        
-                        # 말속도 점수
-                        if final_sps >= 5.0: score_rate += 3
-                        elif final_sps >= 4.5: score_rate += 2
-                        if p_rate >= 70 or p_rate <= 30: score_rate += 2
-                        if ratio_e >= 0.75: score_rate += 1
-                        
-                        # 강도 점수
-                        if final_db <= 55.0: score_loud += 3
-                        elif final_db <= 60.0: score_loud += 2
-                        if p_loud <= 30: score_loud += 3
-                        elif p_loud <= 50: score_loud += 2
-                        
-                        # 조음 점수
-                        if p_artic <= 30: score_artic += 3
-                        elif p_artic <= 50: score_artic += 2
-                        
-                        max_score = max(score_rate, score_loud, score_artic)
-                        is_override = False
-                        reason = ""
-                        
-                        # [NEW] AI 확률 추출
-                        idx_loud = list(model_step2.classes_).index('강도 집단') if '강도 집단' in model_step2.classes_ else -1
-                        idx_artic = list(model_step2.classes_).index('조음 집단') if '조음 집단' in model_step2.classes_ else -1
-                        prob_loud = probs_sub[idx_loud] if idx_loud != -1 else 0
-                        prob_artic = probs_sub[idx_artic] if idx_artic != -1 else 0
+                        sub_classes = list(model_step2.classes_)
+                        j = int(np.argmax(probs_sub))
+                        pred_sub = sub_classes[j]
+                        pred_prob = float(probs_sub[j])
+                        final_decision = pred_sub
 
-                        if max_score >= 2:
-                            is_override = True
-                            
-                            # [Tie-Breaker: 동점 시 AI 확률 우선]
-                            if (score_loud == max_score) and (score_artic == max_score):
-                                if prob_artic > prob_loud:
-                                    final_decision = "조음 집단 (재조정됨 - AI확률 반영)"
-                                    reason = f"심각도 동점(3점)이나 AI 예측(조음 {prob_artic*100:.1f}%) 우세"
-                                else:
-                                    final_decision = "강도 집단 (재조정됨 - AI확률 반영)"
-                                    reason = f"심각도 동점(3점)이나 AI 예측(강도 {prob_loud*100:.1f}%) 우세"
-                            
-                            elif score_loud == max_score:
-                                final_decision = "강도 집단 (재조정됨)"
-                                reason = f"강도 심각도 {score_loud}점 (최고점)"
-                            elif score_artic == max_score:
-                                final_decision = "조음 집단 (재조정됨)"
-                                reason = f"조음 심각도 {score_artic}점 (최고점)"
-                            else:
-                                final_decision = "말속도 집단 (재조정됨)"
-                                reason = f"말속도 심각도 {score_rate}점 (최고점)"
-                        
-                        st.error(f"🔴 **파킨슨 특성 감지:** {final_decision}")
-                        
-                        labels = list(model_step2.classes_)
-                        labels_with_probs = [f"{label}\n({prob*100:.1f}%)" for label, prob in zip(labels, probs_sub)]
-                        fig_radar = plt.figure(figsize=(3, 3))
-                        ax = fig_radar.add_subplot(111, polar=True)
-                        angles = np.linspace(0, 2 * np.pi, len(labels), endpoint=False).tolist()
-                        angles += angles[:1]
-                        stats = probs_sub.tolist() + [probs_sub[0]]
-                        ax.plot(angles, stats, linewidth=2, linestyle='solid', color='red')
-                        ax.fill(angles, stats, 'red', alpha=0.25)
-                        ax.set_xticks(angles[:-1])
-                        ax.set_xticklabels(labels_with_probs)
-                        
-                        c_chart, c_desc = st.columns([1, 2])
-                        with c_chart: st.pyplot(fig_radar)
-                        with c_desc:
-                            if "강도" in final_decision: st.info("💡 특징: 목소리 크기가 작고 약합니다. (Hypophonia)")
-                            elif "말속도" in final_decision: st.info("💡 특징: 말이 빠르거나 리듬이 불규칙하며, 정서적 불안감이 동반될 수 있습니다.")
-                            else: st.info("💡 특징: 발음이 뭉개지고 정확도가 떨어집니다.")
-                            
-                            if is_override:
-                                st.warning(f"※ 참고: AI 예측과 달리, [{reason}]을 근거로 최종 진단이 보정되었습니다.")
+                        st.info(f"➡️ PD 하위 집단 예측: **{pred_sub}** ({pred_prob*100:.1f}%)")
 
-                    else: final_decision = "Parkinson (Subtype Model Error)"
+                        # Step2 class별 cut-off (학습기반) - 미만이면 불확실 경고
+                        sub_cut = None
+                        if CUTS and isinstance(CUTS, dict):
+                            sub_cut = (CUTS.get("step2_cutoff_by_class") or {}).get(pred_sub, None)
+                        if sub_cut is not None and pred_prob < float(sub_cut):
+                            st.warning(f"⚠️ 예측 확률이 학습기반 cut-off({float(sub_cut):.2f}) 미만입니다. '불확실'로 해석/재검 권고")
+                            final_decision = f"{pred_sub} (불확실)"
+                    else:
+                        final_decision = "Parkinson"
+                else:
+                    st.success(f"🟢 **정상 음성 (Normal) ({prob_normal:.1f}%)**  | PD={p_pd*100:.1f}% , cut-off={pd_cut:.2f}")
+                    final_decision = "Normal"
 
-            st.divider()
-            with st.expander("💡 상세 종합 해석 보기", expanded=True):
-                pos, neg = generate_interpretation(prob_normal, final_db, final_sps, range_adj, p_artic, vhi_total, vhi_e)
-                st.markdown(f"**1. 정상(Normal) 확률이 {prob_normal:.1f}%로 나타난 이유 (긍정적 요인):**")
-                if pos: 
-                    for p in pos: st.markdown(f"- ✅ {p}")
-                else: st.markdown("- 특별한 긍정적 요인이 감지되지 않았습니다.")
+            # Step1 메타(저장/로그용)
+            st.session_state.step1_meta = {"p_pd": p_pd, "p_normal": p_norm, "cutoff": pd_cut}
 
-                st.markdown(f"**2. 파킨슨(PD) 가능성이 {100-prob_normal:.1f}% 존재하는 이유 (위험 요인):**")
-                if neg: 
-                    for n in neg: st.markdown(f"- ⚠️ {n}")
-                else: st.markdown("- 특별한 위험 요인이 감지되지 않았습니다.")
+            # 해석 텍스트
+            positives, negatives = generate_interpretation(prob_normal, final_db, final_sps, range_adj, p_artic, vhi_total, vhi_e)
+            st.markdown("##### ✅ 정상일 확률이 높게 나온 이유")
+            for p in positives: st.write(f"- {p}")
+            st.markdown("##### ⚠️ 파킨슨 가능성이 존재하는 이유")
+            for n in negatives: st.write(f"- {n}")
 
+
+            # 저장/전송용 데이터 패키징
             st.session_state.save_ready_data = {
                 'wav_path': st.session_state.current_wav_path,
                 'patient': {'name': subject_name, 'age': subject_age, 'gender': subject_gender},
@@ -590,9 +793,13 @@ if st.session_state.get('is_analyzed'):
                     'vhi_total': vhi_total, 'vhi_p': vhi_p, 'vhi_f': vhi_f, 'vhi_e': vhi_e,
                     'p_artic': p_artic, 'p_pitch': p_pitch, 'p_loud': p_loud, 'p_rate': p_rate, 'p_prange': p_prange
                 },
-                'diagnosis': {'final': final_decision, 'normal_prob': prob_normal}
+                'diagnosis': {'final': final_decision, 'normal_prob': prob_normal},
+                'step1_meta': st.session_state.get('step1_meta', {"p_pd": p_pd, "p_normal": p_norm, "cutoff": pd_cut})
             }
-        else: st.error("모델 로드 실패")
+            st.session_state.is_saved = False
+
+        else:
+            st.error("모델 로드 실패")
 
 # 전송 버튼
 st.markdown("---")
@@ -614,54 +821,3 @@ if st.button("☁️ 데이터 전송 (메일+시트)", type="primary"):
             st.success(f"✅ 처리 완료! {msg}")
         else:
             st.error(f"❌ 전송 실패: {msg}")
-
-
-# ==========================================
-# [추가] DB 저장 버튼 (SQLite)
-# ==========================================
-if st.button("🗄️ DB 저장 (SQLite)", type="secondary"):
-    if 'save_ready_data' not in st.session_state:
-        st.error("🚨 저장할 데이터가 없습니다. 먼저 [🚀 진단 결과 확인]을 눌러주세요!")
-    else:
-        with st.spinner("SQLite 저장 중..."):
-            ok, msg = save_to_sqlite(
-                st.session_state.save_ready_data['wav_path'],
-                st.session_state.save_ready_data['patient'],
-                st.session_state.save_ready_data['analysis'],
-                st.session_state.save_ready_data['diagnosis'],
-                model_version="v1.0",
-                extra={"note": "saved_from_streamlit"}
-            )
-        if ok:
-            st.success(f"✅ {msg}")
-        else:
-            st.error(f"❌ DB 저장 실패: {msg}")
-
-with st.expander("🗄️ DB 현황 / 최근 저장 기록"):
-    try:
-        n_subj, n_ana = db_stats()
-        st.write(f"- Subjects: **{n_subj}**")
-        st.write(f"- Analyses: **{n_ana}**")
-
-        df_recent = fetch_recent_analyses(limit=20)
-        if not df_recent.empty:
-            st.dataframe(df_recent, use_container_width=True)
-            csv_bytes = df_recent.to_csv(index=False).encode("utf-8-sig")
-            st.download_button("최근 20건 CSV 다운로드", data=csv_bytes, file_name="recent_analyses.csv", mime="text/csv")
-        else:
-            st.write("최근 기록이 없습니다.")
-
-        # DB 파일 다운로드 (환경에 따라 의미가 다를 수 있음)
-        try:
-            db_file = Path(DB_PATH)
-            if db_file.exists():
-                st.download_button(
-                    "DB 파일 다운로드 (pd_tool.db)",
-                    data=db_file.read_bytes(),
-                    file_name=db_file.name,
-                    mime="application/octet-stream"
-                )
-        except Exception:
-            pass
-    except Exception as e:
-        st.write(f"DB 정보를 불러오지 못했습니다: {e}")
