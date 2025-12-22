@@ -32,6 +32,7 @@ from scipy.signal import find_peaks
 from sklearn.linear_model import LogisticRegression
 from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
 from sklearn.model_selection import LeaveOneOut
+from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 
@@ -214,6 +215,7 @@ def compute_cutoffs_from_training(_file_mtime=None):
     oof_pd = np.zeros(len(df), dtype=float)
 
     pipe1 = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
         ("scaler", StandardScaler()),
         ("clf", LogisticRegression(
             solver="lbfgs",
@@ -246,6 +248,7 @@ def compute_cutoffs_from_training(_file_mtime=None):
         oof2 = np.zeros((len(df_pd), len(classes)), dtype=float)
 
         pipe2 = Pipeline([
+            ("imputer", SimpleImputer(strategy="median")),
             ("scaler", StandardScaler()),
             ("clf", QuadraticDiscriminantAnalysis(reg_param=0.1))
         ])
@@ -474,6 +477,7 @@ def train_models():
     X1 = df[FEATS_STEP1].copy()
     y1 = df["Diagnosis"].astype(str).values
     model_step1 = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
         ("scaler", StandardScaler()),
         ("clf", LogisticRegression(
             solver="lbfgs",
@@ -492,6 +496,7 @@ def train_models():
     X2 = df_pd[FEATS_STEP2].copy()
     y2 = df_pd["Subgroup"].astype(str).values
     model_step2 = Pipeline([
+        ("imputer", SimpleImputer(strategy="median")),
         ("scaler", StandardScaler()),
         ("clf", QuadraticDiscriminantAnalysis(reg_param=0.1))
     ])
