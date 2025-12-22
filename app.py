@@ -30,7 +30,7 @@ from pathlib import Path
 from scipy.signal import find_peaks
 
 from sklearn.linear_model import LogisticRegression
-from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
+from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis, LinearDiscriminantAnalysis
 from sklearn.model_selection import LeaveOneOut
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
@@ -250,7 +250,7 @@ def compute_cutoffs_from_training(_file_mtime=None):
         pipe2 = Pipeline([
             ("imputer", SimpleImputer(strategy="median")),
             ("scaler", StandardScaler()),
-            ("clf", QuadraticDiscriminantAnalysis(reg_param=0.1))
+            ("clf", LinearDiscriminantAnalysis(solver='eigen', shrinkage='auto'))
         ])
 
         for tr, te in loo.split(X2, y2):
@@ -498,7 +498,7 @@ def train_models():
     model_step2 = Pipeline([
         ("imputer", SimpleImputer(strategy="median")),
         ("scaler", StandardScaler()),
-        ("clf", QuadraticDiscriminantAnalysis(reg_param=0.1))
+        ("clf", LinearDiscriminantAnalysis(solver='eigen', shrinkage='auto'))
     ])
     model_step2.fit(X2, y2)
 
