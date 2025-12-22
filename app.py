@@ -209,7 +209,7 @@ def compute_cutoffs_from_training(_file_mtime=None):
             df[col] = df[col].fillna(0.0)
 
     # ---------- Step1: Normal vs PD cut-off (LOO OOF) ----------
-    X1 = df[FEATS_STEP1].copy().to_numpy().to_numpy()
+    X1 = df[FEATS_STEP1].copy().to_numpy()
     y1 = df["Diagnosis"].astype(str).values
 
     loo = LeaveOneOut()
@@ -233,7 +233,8 @@ def compute_cutoffs_from_training(_file_mtime=None):
         pd_idx = int(np.where(cls == 'Parkinson')[0][0]) if 'Parkinson' in cls else -1
         oof_pd[te[0]] = float(proba[pd_idx]) if pd_idx >= 0 else float(proba[-1])
 
-    step1_cutoff, step1_sens, step1_spec = _youden_cutoff(y1, oof_pd)
+    y1_bin = (y1 == 'Parkinson').astype(int)
+    step1_cutoff, step1_sens, step1_spec = _youden_cutoff(y1_bin, oof_pd)
 
     # ---------- Step2: PD 내부 3집단 cut-off (클래스별 OVR, LOO OOF) ----------
     df_pd = df[df["Diagnosis"] == "Parkinson"].copy()
@@ -241,7 +242,7 @@ def compute_cutoffs_from_training(_file_mtime=None):
     step2_report = None
 
     if len(df_pd) >= 3:
-        X2 = df_pd[FEATS_STEP2].copy().to_numpy().to_numpy()
+        X2 = df_pd[FEATS_STEP2].copy().to_numpy()
         y2 = df_pd["Subgroup"].astype(str).values
         classes = np.unique(y2)
         class_to_idx = {c: i for i, c in enumerate(classes)}
@@ -449,10 +450,10 @@ def train_models():
             vhi_total, vhi_p, vhi_f, vhi_e,
             sex_num
         ])
-        y1.append(1 if diag == "Parkinson" else 0)
+        y1.append(diag)
 
     X1 = np.array(X1_rows, dtype=float)
-    y1 = np.array(y1, dtype=int)
+    y1 = np.array(y1, dtype=str)
 
     from sklearn.pipeline import Pipeline
     from sklearn.impute import SimpleImputer
