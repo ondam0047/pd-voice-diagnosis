@@ -209,7 +209,7 @@ def compute_cutoffs_from_training(_file_mtime=None):
             df[col] = df[col].fillna(0.0)
 
     # ---------- Step1: Normal vs PD cut-off (LOO OOF) ----------
-    X1 = df[FEATS_STEP1].copy()
+    X1 = df[FEATS_STEP1].copy().to_numpy().to_numpy()
     y1 = df["Diagnosis"].astype(str).values
 
     loo = LeaveOneOut()
@@ -241,7 +241,7 @@ def compute_cutoffs_from_training(_file_mtime=None):
     step2_report = None
 
     if len(df_pd) >= 3:
-        X2 = df_pd[FEATS_STEP2].copy()
+        X2 = df_pd[FEATS_STEP2].copy().to_numpy().to_numpy()
         y2 = df_pd["Subgroup"].astype(str).values
         classes = np.unique(y2)
         class_to_idx = {c: i for i, c in enumerate(classes)}
@@ -475,7 +475,7 @@ def train_models():
             df[col] = df[col].fillna(0.0)
 
     # Step1
-    X1 = df[FEATS_STEP1].copy()
+    X1 = df[FEATS_STEP1].copy().to_numpy().to_numpy()
     y1 = df["Diagnosis"].astype(str).values
     model_step1 = Pipeline([
         ("imputer", SimpleImputer(strategy="median")),
@@ -494,7 +494,7 @@ def train_models():
     if df_pd.empty:
         return model_step1, None
 
-    X2 = df_pd[FEATS_STEP2].copy()
+    X2 = df_pd[FEATS_STEP2].copy().to_numpy().to_numpy()
     y2 = df_pd["Subgroup"].astype(str).values
     model_step2 = Pipeline([
         ("imputer", SimpleImputer(strategy="median")),
@@ -896,7 +896,7 @@ if st.session_state.get('is_analyzed'):
                     sex_num_ui
                 ]], columns=FEATS_STEP1)
 
-                proba_1 = model_step1.predict_proba(input_1)[0]
+                proba_1 = model_step1.predict_proba(input_1.to_numpy())[0]
                 classes_1 = list(model_step1.classes_)
                 if "Parkinson" in classes_1:
                     p_pd = float(proba_1[classes_1.index("Parkinson")])
@@ -921,7 +921,7 @@ if st.session_state.get('is_analyzed'):
                         }
                         input_2 = pd.DataFrame([[feat_map2.get(c, None) for c in FEATS_STEP2]], columns=FEATS_STEP2)
 
-                        probs_sub = model_step2.predict_proba(input_2)[0]
+                        probs_sub = model_step2.predict_proba(input_2.to_numpy())[0]
                         sub_classes = list(model_step2.classes_)
                         j = int(np.argmax(probs_sub))
                         pred_sub = sub_classes[j]
