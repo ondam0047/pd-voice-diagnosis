@@ -926,6 +926,42 @@ if st.session_state.get('is_analyzed'):
 
                         st.info(f"➡️ PD 하위 집단 예측: **{pred_sub}** ({pred_prob*100:.1f}%)")
 
+                        # ---- Spider/Radar chart: PD 하위집단 확률 시각화 (원래 UI 복원) ----
+                        try:
+                            labels = sub_classes
+                            labels_with_probs = [f"{label}\n({prob*100:.1f}%)" for label, prob in zip(labels, probs_sub)]
+                            fig_radar = plt.figure(figsize=(3, 3))
+                            ax = fig_radar.add_subplot(111, polar=True)
+                            angles = np.linspace(0, 2 * np.pi, len(labels), endpoint=False).tolist()
+                            angles += angles[:1]
+                            stats = probs_sub.tolist() + [probs_sub[0]]
+                            ax.plot(angles, stats, linewidth=2, linestyle='solid', color='red')
+                            ax.fill(angles, stats, 'red', alpha=0.25)
+                            ax.set_xticks(angles[:-1])
+                            ax.set_xticklabels(labels_with_probs)
+
+                            c_chart, c_desc = st.columns([1, 2])
+                            with c_chart:
+                                st.pyplot(fig_radar)
+
+                            with c_desc:
+                                if "강도" in pred_sub:
+                                    st.info("💡 특징: 목소리 크기가 작고 약합니다. (Hypophonia)")
+                                elif "말속도" in pred_sub:
+                                    st.info("💡 특징: 말이 빠르거나 리듬이 불규칙할 수 있습니다. (Rate/Rhythm)")
+                                else:
+                                    st.info("💡 특징: 발음이 뭉개지고 정확도가 떨어질 수 있습니다. (Articulation)")
+
+                                with st.expander("📊 하위집단 확률(상세)", expanded=False):
+                                    dfp = pd.DataFrame({
+                                        "집단": labels,
+                                        "확률(%)": (np.array(probs_sub) * 100).round(1)
+                                    }).sort_values("확률(%)", ascending=False)
+                                    st.dataframe(dfp, hide_index=True, use_container_width=True)
+                        except Exception as e:
+                            st.warning(f"레이더 차트 생성 실패: {e}")
+
+
                         # Step2 class별 cut-off (학습기반) - 미만이면 불확실 경고
                         sub_cut = None
                         if CUTS and isinstance(CUTS, dict):
