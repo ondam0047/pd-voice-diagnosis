@@ -1033,15 +1033,32 @@ if st.session_state.get('is_analyzed'):
                         pred_prob = float(probs_sub[j])
                         final_decision = pred_sub
 
+                        
                         # --- Hybrid rule (서비스 안정성): '조음 집단' 우선 판정 ---
                         # 조음만 문제인 패턴을 살리기 위해, 조음 정확도는 낮고(≤40) 속도 신호는 높지 않을 때(청지각 말속도≤60, SPS≤4.6) 조음 집단으로 우선 분류합니다.
+                        # 단, 모델이 '강도 집단'을 매우 강하게(확률≥0.70) 예측하면 하이브리드 규칙이 결과를 뒤집지 않도록 방어막을 둡니다.
+                        intensity_prob = None
+                        try:
+                            intensity_prob = float(probs_sub[list(sub_classes).index("강도 집단")])
+                        except Exception:
+                            intensity_prob = None
+
                         rule_artic = (p_artic is not None and p_rate is not None and final_sps is not None and
                                       float(p_artic) <= 40 and float(p_rate) <= 60 and float(final_sps) <= 4.6)
-                        if rule_artic:
+
+                        allow_hybrid = not (intensity_prob is not None and intensity_prob >= 0.70)
+
+                        if rule_artic and allow_hybrid:
                             pred_sub = "조음 집단"
-                            pred_prob = max(pred_prob, 0.80)
+                            try:
+                                jo_prob = float(probs_sub[list(sub_classes).index("조음 집단")])
+                            except Exception:
+                                jo_prob = 0.0
+                            pred_prob = max(jo_prob, 0.80)
                             final_decision = pred_sub
                             st.warning("🧩 하이브리드 규칙 적용: 조음 정확도 저하(≤40) + 속도 신호 높지 않음 → **조음 집단**으로 우선 분류했습니다.")
+                        elif rule_artic and not allow_hybrid:
+                            st.info(f"🛡️ 하이브리드 규칙은 발동 조건을 만족했지만, 모델이 **강도 집단 확률 {intensity_prob*100:.1f}%**로 강하게 예측하여(≥70%) 결과를 뒤집지 않았습니다.")
 
                         st.info(f"➡️ PD 하위 집단 예측: **{pred_sub}** ({pred_prob*100:.1f}%)")
 
