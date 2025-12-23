@@ -1120,8 +1120,116 @@ if st.session_state.get('is_analyzed'):
                     else:
                         final_decision = "Parkinson"
                 else:
-                    st.success(f"🟢 **정상 음성 (Normal) ({prob_normal:.1f}%)**  | PD={p_pd*100:.1f}% , cut-off={pd_cut:.2f}")
-                    final_decision = "Normal"
+                    # 확률 기반으로는 정상으로 분류되었더라도, 청지각/자가보고/음향 일부 지표에서 뚜렷한 이상 소견이 있으면
+                    # 서비스 안정성을 위해 '정상(주의)'로 표시하고 추가 평가/추적검사를 권장합니다.
+                    red_flags = []
+                    try:
+                        if p_artic is not None and float(p_artic) <= 40:
+                            red_flags.append("조음정확도(청지각) ≤ 40")
+                    except Exception:
+                        pass
+                    try:
+                        if final_db is not None and float(final_db) <= 58:
+                            red_flags.append("평균 음성 강도(dB) 낮음")
+                    except Exception:
+                        pass
+                    try:
+                        if final_sps is not None and float(final_sps) >= 4.6:
+                            red_flags.append("말속도(SPS) 빠름")
+                    except Exception:
+                        pass
+                    try:
+                        if vhi_total is not None and float(vhi_total) >= 10:
+                            red_flags.append("VHI-10 높음(≥10)")
+                    except Exception:
+                        pass
+
+                    if red_flags:
+                        st.warning(
+                            f"🟡 **정상으로 분류되었지만(확률 기반), 일부 지표에서 이상 소견이 관찰됩니다. 추가 평가/추적검사를 권장합니다.**  | "
+                            f"Normal={prob_normal:.1f}%  PD={p_pd*100:.1f}% (cut-off={pd_cut:.2f})"
+                        )
+                        st.write("관찰된 항목: " + ", ".join(red_flags))
+                        final_decision = "Normal (주의)"
+                    else:
+                        st.success(f"🟢 **정상 음성 (Normal) ({prob_normal:.1f}%)**  | PD={p_pd*100:.1f}% , cut-off={pd_cut:.2f}")
+                        final_decision = "Normal"
+            # --- (임상용) 정상(주의)에서도 PD 하위집단 추정 결과 표시(참고) ---
+            # Step2 모델은 파킨슨 환자 데이터로 학습되어 '정상'에서의 해석에는 제한이 있습니다.
+            show_step2_reference = False
+            try:
+                # 임상용: 정상/정상(주의)에서도 하위집단 추정(참고) 표시
+                show_step2_reference = str(final_decision).startswith('Normal')
+            except Exception:
+                show_step2_reference = False
+
+            if show_step2_reference and model_step2:
+                st.info("ℹ️ **임상 참고:** PD 하위집단(강도/말속도/조음) 추정 결과입니다. (Step2는 PD 데이터로 학습되어 정상 케이스에서는 참고용으로만 해석하세요.)")
+                try:
+                    feat_map2 = {
+                        'Intensity': final_db,
+                        'SPS': final_sps,
+                        'P_Loudness': p_loud,
+                        'P_Rate': p_rate,
+                        'P_Artic': p_artic,
+                    }
+                    input_2_ref = pd.DataFrame([[feat_map2.get(c, None) for c in FEATS_STEP2]], columns=FEATS_STEP2)
+
+                    probs_sub_ref = model_step2.predict_proba(input_2_ref.to_numpy())[0]
+                    sub_classes_ref = list(model_step2.classes_)
+                    j_ref = int(np.argmax(probs_sub_ref))
+                    pred_sub_ref = sub_classes_ref[j_ref]
+                    pred_prob_ref = float(probs_sub_ref[j_ref])
+
+                    # Hybrid rule + intensity guard (참고용 추정에도 동일 적용)
+                    pred_sub_ref_final = pred_sub_ref
+                    intensity_prob_ref = None
+                    try:
+                        intensity_prob_ref = float(probs_sub_ref[list(sub_classes_ref).index("강도 집단")])
+                    except Exception:
+                        intensity_prob_ref = None
+
+                    try:
+                        cond_artic = (p_artic is not None) and (float(p_artic) <= 40)
+                        cond_rate = (p_rate is not None) and (float(p_rate) <= 60)
+                        cond_sps = (final_sps is not None) and (float(final_sps) <= 4.6)
+                        if cond_artic and cond_rate and cond_sps:
+                            # guard: if intensity probability is very high, do not override
+                            if intensity_prob_ref is not None and intensity_prob_ref >= 0.70:
+                                st.info(f"🛡️ (참고) 조음 우선 규칙 조건을 만족했지만, 모델이 **강도 집단 {intensity_prob_ref*100:.1f}%**로 강하게 예측(≥70%)하여 결과를 유지했습니다.")
+                            else:
+                                pred_sub_ref_final = "조음 집단"
+                                st.warning("🧩 (참고) 조음 우선 규칙 적용: 조음 정확도 저하(≤40) + 속도 신호 높지 않음 → **조음 집단**으로 표시했습니다.")
+                    except Exception:
+                        pass
+
+                    st.markdown(f"**PD 하위집단 추정(참고): {pred_sub_ref_final}** ({pred_prob_ref*100:.1f}%)")
+
+                    # 확률 표
+                    dfp_ref = pd.DataFrame({"진단": sub_classes_ref, "확률(%)": [round(p*100, 1) for p in probs_sub_ref]})
+                    with st.expander("📊 하위집단 확률(상세) (참고)", expanded=False):
+                        st.dataframe(dfp_ref, use_container_width=True)
+
+                    # Radar chart
+                    try:
+                        labels = sub_classes_ref
+                        labels_with_probs = [f"{label}\n({prob*100:.1f}%)" for label, prob in zip(labels, probs_sub_ref)]
+                        fig_radar_ref = plt.figure(figsize=(3, 3))
+                        ax = fig_radar_ref.add_subplot(111, polar=True)
+                        angles = np.linspace(0, 2 * np.pi, len(labels), endpoint=False).tolist()
+                        angles += angles[:1]
+                        stats = probs_sub_ref.tolist() + [probs_sub_ref[0]]
+                        ax.plot(angles, stats, linewidth=2, linestyle='solid', color='red')
+                        ax.fill(angles, stats, 'red', alpha=0.25)
+                        ax.set_thetagrids(np.degrees(angles[:-1]), labels_with_probs, fontsize=10)
+                        ax.set_ylim(0, 1)
+                        ax.grid(True)
+                        st.pyplot(fig_radar_ref, use_container_width=False)
+                        plt.close(fig_radar_ref)
+                    except Exception:
+                        pass
+                except Exception:
+                    st.info("참고용 하위집단 추정 중 오류가 발생했습니다.")
 
             # Step1 메타(저장/로그용)
             st.session_state.step1_meta = {"p_pd": p_pd, "p_normal": p_norm, "cutoff": pd_cut}
