@@ -1247,8 +1247,9 @@ if st.session_state.get('is_analyzed'):
             positives, negatives = generate_interpretation(prob_normal, final_db, final_sps, range_adj, p_artic, vhi_total, vhi_e)
 
             # --- [설명 보강] 규칙 기반 설명이 비어있을 때: 모델 TOP 기여 변수로 최소 3개 생성 ---
+            # --- 자동 설명(모델 기여도): 실패해도 이유가 비지 않도록 ---
+            x1_row = [st.session_state.get('f0_mean'), range_adj, final_db, final_sps, sex_num_ui]
             try:
-                x1_row = [st.session_state.get('f0_mean'), range_adj, final_db, final_sps, sex_num_ui]
                 pos_auto, neg_auto = top_contrib_linear_binary(model_step1, x1_row, FEATS_STEP1, pos_label="Parkinson", topk=3)
                 # 정상 확률 설명이 비면(또는 너무 짧으면) 자동 설명을 섞어줌
                 if not positives or len(positives) < 1:
@@ -1256,14 +1257,19 @@ if st.session_state.get('is_analyzed'):
                 # PD 가능성 이유가 비면 자동 설명(=PD 쪽 기여) 추가
                 if not negatives or len(negatives) < 1:
                     negatives = (negatives or []) + (pos_auto[:3] if pos_auto else [])
-                # 최종 안전장치: 이유 리스트가 완전히 비어 있으면 최소 1개 문장이라도 채워줌
-                if not positives:
-                    positives = ["입력값들이 학습 데이터 기준에서 정상 범위에 비교적 가깝게 나타났습니다."]
-                if not negatives:
-                    # PD 확률이 낮더라도 cut-off 근처(경계)일 때는 이유를 보여주는 것이 임상적으로 유용
-                    negatives = [f"PD 확률이 cut-off 근처로 나타났습니다(PD={prob_pd:.1%}, cut-off={cutoff_step1:.2f}). 일부 지표가 PD 학습군과 유사할 수 있어 추가 평가/추적을 권장합니다."]
             except Exception:
+                # 자동 설명이 실패하더라도 아래의 최종 안전장치에서 공란을 막습니다.
                 pass
+
+            # --- 최종 안전장치: 이유 리스트 공란 방지 (try 밖에서 무조건 실행) ---
+            if not positives:
+                positives = ["입력값들이 학습 데이터 기준에서 정상 범위에 비교적 가깝게 나타났습니다."]
+            if not negatives:
+                # PD 확률이 낮더라도 cut-off 근처(경계)일 때는 이유를 보여주는 것이 임상적으로 유용
+                if abs(p_pd - pd_cut) <= 0.10:
+                    negatives = [f"PD 확률이 cut-off({pd_cut:.2f}) 근처입니다(PD={p_pd*100:.1f}%). 일부 지표가 PD 학습군과 유사할 수 있어 추가 평가/추적을 권장합니다."]
+                else:
+                    negatives = [f"모델이 일부 지표를 PD 학습군과 유사하게 해석했습니다(PD={p_pd*100:.1f}%). 추가 평가/추적을 권장합니다."]
 
             st.markdown("##### ✅ 정상일 확률이 높게 나온 이유")
             for p in positives: 
