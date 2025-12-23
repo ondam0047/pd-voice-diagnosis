@@ -1256,14 +1256,13 @@ if st.session_state.get('is_analyzed'):
                 # PD 가능성 이유가 비면 자동 설명(=PD 쪽 기여) 추가
                 if not negatives or len(negatives) < 1:
                     negatives = (negatives or []) + (pos_auto[:3] if pos_auto else [])
-            
-# 최종 안전장치: 이유 리스트가 완전히 비어 있으면 최소 1개 문장이라도 채워줌
-if not positives:
-    positives = ["입력값들이 학습 데이터 기준에서 정상 범위에 비교적 가깝게 나타났습니다."]
-if not negatives:
-    # PD 확률이 낮더라도 cut-off 근처(경계)일 때는 이유를 보여주는 것이 임상적으로 유용
-    negatives = [f"PD 확률이 cut-off 근처로 나타났습니다(PD={prob_pd:.1%}, cut-off={cutoff_step1:.2f}). 일부 지표가 PD 학습군과 유사할 수 있어 추가 평가/추적을 권장합니다."]
-except Exception:
+                # 최종 안전장치: 이유 리스트가 완전히 비어 있으면 최소 1개 문장이라도 채워줌
+                if not positives:
+                    positives = ["입력값들이 학습 데이터 기준에서 정상 범위에 비교적 가깝게 나타났습니다."]
+                if not negatives:
+                    # PD 확률이 낮더라도 cut-off 근처(경계)일 때는 이유를 보여주는 것이 임상적으로 유용
+                    negatives = [f"PD 확률이 cut-off 근처로 나타났습니다(PD={prob_pd:.1%}, cut-off={cutoff_step1:.2f}). 일부 지표가 PD 학습군과 유사할 수 있어 추가 평가/추적을 권장합니다."]
+            except Exception:
                 pass
 
             st.markdown("##### ✅ 정상일 확률이 높게 나온 이유")
