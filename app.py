@@ -65,14 +65,14 @@ FEAT_LABELS_STEP2 = {
 }
 
 def _get_pipeline_parts(pipeline):
-    \"\"\"Return (imputer, scaler, estimator) if present, else None for missing.\"\"\"
+    """Return (imputer, scaler, estimator) if present, else None for missing."""
     imputer = None
     scaler = None
     est = pipeline
     try:
         # sklearn Pipeline
         if hasattr(pipeline, "named_steps"):
-            est = pipeline.named_steps.get("clf", None) or pipeline.named_steps.get("lda", None) or list(pipeline.named_steps.values())[-1]
+            est = (pipeline.named_steps.get("clf") or pipeline.named_steps.get("lda") or list(pipeline.named_steps.values())[-1])
             imputer = pipeline.named_steps.get("imputer")
             scaler = pipeline.named_steps.get("scaler")
     except Exception:
@@ -80,9 +80,9 @@ def _get_pipeline_parts(pipeline):
     return imputer, scaler, est
 
 def top_contrib_linear_binary(pipeline, x_row, feat_names, pos_label="Parkinson", topk=3):
-    \"\"\"Return (pos_reasons, neg_reasons) from linear contributions for binary classifier.
+    """Return (pos_reasons, neg_reasons) from linear contributions for binary classifier.
     x_row: 1D array-like of raw features in feat_names order.
-    \"\"\"
+    """
     imputer, scaler, est = _get_pipeline_parts(pipeline)
     X = np.asarray(x_row, dtype=float).reshape(1, -1)
     if imputer is not None:
@@ -116,15 +116,15 @@ def top_contrib_linear_binary(pipeline, x_row, feat_names, pos_label="Parkinson"
         label = FEAT_LABELS_STEP1.get(name, FEAT_LABELS_STEP2.get(name, name))
         val = float(np.asarray(x_row, dtype=float)[i]) if np.isfinite(np.asarray(x_row, dtype=float)[i]) else None
         if contrib[i] >= 0 and len(pos) < topk:
-            pos.append(f\"{label}이(가) 학습 기준에서 PD 쪽으로 작용했습니다\" + (f\" (입력: {val:.2f})\" if val is not None else \"\"))
+            pos.append(f"{label}이(가) 학습 기준에서 PD 쪽으로 작용했습니다" + (f" (입력: {val:.2f})" if val is not None else ""))
         elif contrib[i] < 0 and len(neg) < topk:
-            neg.append(f\"{label}이(가) 학습 기준에서 정상 쪽으로 작용했습니다\" + (f\" (입력: {val:.2f})\" if val is not None else \"\"))
+            neg.append(f"{label}이(가) 학습 기준에서 정상 쪽으로 작용했습니다" + (f" (입력: {val:.2f})" if val is not None else ""))
         if len(pos) >= topk and len(neg) >= topk:
             break
     return pos, neg
 
 def top_contrib_linear_multiclass(pipeline, x_row, feat_names, pred_class, topk=3):
-    \"\"\"Return reasons for predicted class for linear multiclass estimator (LDA).\"\"\"
+    """Return reasons for predicted class for linear multiclass estimator (LDA)."""
     imputer, scaler, est = _get_pipeline_parts(pipeline)
     X = np.asarray(x_row, dtype=float).reshape(1, -1)
     if imputer is not None:
@@ -152,7 +152,7 @@ def top_contrib_linear_multiclass(pipeline, x_row, feat_names, pred_class, topk=
         name = feat_names[i]
         label = FEAT_LABELS_STEP2.get(name, FEAT_LABELS_STEP1.get(name, name))
         val = float(np.asarray(x_row, dtype=float)[i]) if np.isfinite(np.asarray(x_row, dtype=float)[i]) else None
-        reasons.append(f\"{label}이(가) 이 집단 판정에 크게 기여했습니다\" + (f\" (입력: {val:.2f})\" if val is not None else \"\"))
+        reasons.append(f"{label}이(가) 이 집단 판정에 크게 기여했습니다" + (f" (입력: {val:.2f})" if val is not None else ""))
     return reasons
 
 # ==========================================
@@ -1088,7 +1088,7 @@ if st.session_state.get('is_analyzed'):
                                     except Exception:
                                         pass
 
-st.dataframe(dfp, hide_index=True, use_container_width=True)
+                                    st.dataframe(dfp, hide_index=True, use_container_width=True)
                         except Exception as e:
                             st.warning(f"레이더 차트 생성 실패: {e}")
 
