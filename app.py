@@ -40,6 +40,121 @@ from sklearn.pipeline import Pipeline
 # --- 페이지 기본 설정 ---
 st.set_page_config(page_title="파킨슨병 환자 하위유형 분류 프로그램", layout="wide")
 
+
+# ==========================================
+# [설명(이유) 자동 생성: 상위 기여 변수 TOP-K]
+# - 규칙 기반 설명이 비어있을 때, 모델의 선형 기여도(표준화된 값 × 계수)를 이용해
+#   '왜 그렇게 나왔는지'를 최소 3개 항목으로 출력합니다.
+# - 서비스 안정성 목적: 과도한 단정 대신 '학습 데이터 기준으로' 표현합니다.
+# ==========================================
+
+FEAT_LABELS_STEP1 = {
+    "F0": "평균 음도(F0)",
+    "Range": "음도 범위(range)",
+    "Intensity": "평균 음성 강도(dB)",
+    "SPS": "말속도(SPS)",
+    "Sex": "성별"
+}
+
+FEAT_LABELS_STEP2 = {
+    "Intensity": "평균 음성 강도(dB)",
+    "SPS": "말속도(SPS)",
+    "P_Loudness": "강도(청지각)",
+    "P_Rate": "말속도(청지각)",
+    "P_Artic": "조음정확도(청지각)"
+}
+
+def _get_pipeline_parts(pipeline):
+    \"\"\"Return (imputer, scaler, estimator) if present, else None for missing.\"\"\"
+    imputer = None
+    scaler = None
+    est = pipeline
+    try:
+        # sklearn Pipeline
+        if hasattr(pipeline, "named_steps"):
+            est = pipeline.named_steps.get("clf", None) or pipeline.named_steps.get("lda", None) or list(pipeline.named_steps.values())[-1]
+            imputer = pipeline.named_steps.get("imputer")
+            scaler = pipeline.named_steps.get("scaler")
+    except Exception:
+        pass
+    return imputer, scaler, est
+
+def top_contrib_linear_binary(pipeline, x_row, feat_names, pos_label="Parkinson", topk=3):
+    \"\"\"Return (pos_reasons, neg_reasons) from linear contributions for binary classifier.
+    x_row: 1D array-like of raw features in feat_names order.
+    \"\"\"
+    imputer, scaler, est = _get_pipeline_parts(pipeline)
+    X = np.asarray(x_row, dtype=float).reshape(1, -1)
+    if imputer is not None:
+        X = imputer.transform(X)
+    if scaler is not None:
+        Xs = scaler.transform(X)
+    else:
+        Xs = X
+
+    # determine which row of coef corresponds to pos_label
+    classes = list(getattr(est, "classes_", []))
+    coef = getattr(est, "coef_", None)
+    if coef is None or len(coef) == 0:
+        return [], []
+
+    if len(classes) == 2 and coef.shape[0] == 1:
+        # sklearn binary logistic: coef_ is (1, n_features) for classes_[1]
+        pos_is_class1 = (len(classes) > 1 and classes[1] == pos_label)
+        w = coef[0]
+        contrib = Xs[0] * (w if pos_is_class1 else -w)
+    else:
+        # multi-output-like: fall back
+        w = coef[0]
+        contrib = Xs[0] * w
+
+    # top contributors toward pos (positive contrib) and toward neg (negative contrib)
+    idx_sorted = np.argsort(np.abs(contrib))[::-1]
+    pos, neg = [], []
+    for i in idx_sorted:
+        name = feat_names[i]
+        label = FEAT_LABELS_STEP1.get(name, FEAT_LABELS_STEP2.get(name, name))
+        val = float(np.asarray(x_row, dtype=float)[i]) if np.isfinite(np.asarray(x_row, dtype=float)[i]) else None
+        if contrib[i] >= 0 and len(pos) < topk:
+            pos.append(f\"{label}이(가) 학습 기준에서 PD 쪽으로 작용했습니다\" + (f\" (입력: {val:.2f})\" if val is not None else \"\"))
+        elif contrib[i] < 0 and len(neg) < topk:
+            neg.append(f\"{label}이(가) 학습 기준에서 정상 쪽으로 작용했습니다\" + (f\" (입력: {val:.2f})\" if val is not None else \"\"))
+        if len(pos) >= topk and len(neg) >= topk:
+            break
+    return pos, neg
+
+def top_contrib_linear_multiclass(pipeline, x_row, feat_names, pred_class, topk=3):
+    \"\"\"Return reasons for predicted class for linear multiclass estimator (LDA).\"\"\"
+    imputer, scaler, est = _get_pipeline_parts(pipeline)
+    X = np.asarray(x_row, dtype=float).reshape(1, -1)
+    if imputer is not None:
+        X = imputer.transform(X)
+    if scaler is not None:
+        Xs = scaler.transform(X)
+    else:
+        Xs = X
+
+    classes = list(getattr(est, "classes_", []))
+    coef = getattr(est, "coef_", None)
+    if coef is None or len(classes) == 0:
+        return []
+
+    try:
+        cidx = classes.index(pred_class)
+    except ValueError:
+        cidx = int(np.argmax(getattr(est, "predict_proba", lambda z: np.zeros((1,len(classes))))(Xs)[0])) if len(classes) else 0
+
+    w = coef[cidx] if coef.ndim == 2 else coef
+    contrib = Xs[0] * w
+    idx_sorted = np.argsort(np.abs(contrib))[::-1][:topk]
+    reasons = []
+    for i in idx_sorted:
+        name = feat_names[i]
+        label = FEAT_LABELS_STEP2.get(name, FEAT_LABELS_STEP1.get(name, name))
+        val = float(np.asarray(x_row, dtype=float)[i]) if np.isfinite(np.asarray(x_row, dtype=float)[i]) else None
+        reasons.append(f\"{label}이(가) 이 집단 판정에 크게 기여했습니다\" + (f\" (입력: {val:.2f})\" if val is not None else \"\"))
+    return reasons
+
 # ==========================================
 # [설정] 구글 시트 정보 (Secrets)
 # ==========================================
@@ -54,7 +169,7 @@ except:
 # ==========================================
 # [전역 설정] 폰트 및 변수
 # ==========================================
-FEATS_STEP1 = ['F0', 'Range', 'Intensity', 'SPS', 'VHI_Total', 'VHI_P', 'VHI_F', 'VHI_E', 'Sex']
+FEATS_STEP1 = ['F0', 'Range', 'Intensity', 'SPS', 'Sex']  # Step1 판정에는 VHI를 포함하지 않고(참고 지표로만 사용)
 # Step2는 PD 하위집단 표본이 작아(특히 말속도 집단) 고차원 특성에 불안정합니다.
 # 임상적으로 구분력이 큰 핵심 변수(강도/말속도/조음)만 사용합니다.
 FEATS_STEP2 = ['Intensity', 'SPS', 'P_Loudness', 'P_Rate', 'P_Artic']
@@ -447,7 +562,6 @@ def train_models():
             row.get('Range', np.nan),
             row.get('강도(dB)', np.nan),
             row.get('SPS', np.nan),
-            vhi_total, vhi_p, vhi_f, vhi_e,
             sex_num
         ])
         y1.append(diag)
@@ -709,7 +823,7 @@ def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e):
     if sps < 4.5: positives.append(f"말속도가 {sps:.2f} SPS로 측정되었습니다. 파킨슨병에서 흔히 나타나는 급격한 가속 현상(Festination) 없이 안정적인 속도를 유지하고 있습니다.")
     if db >= 60: positives.append(f"평균 음성 강도가 {db:.1f} dB로, 일반적인 대화 수준(60dB 이상)의 성량을 튼튼하게 유지하고 있습니다.")
 
-    if db < 60: negatives.append(f"평균 음성 강도가 {db:.1f} dB로 다소 작습니다. 이는 파킨슨병의 대표적 증상인 '강도 감소(Hypophonia)'와 유사하여 발성 훈련이 필요할 수 있습니다.")
+    if db < 60: negatives.append(f"평균 음성 강도가 {db:.1f} dB로 낮게 측정되었습니다(※ 마이크/거리/환경에 따라 절대값은 달라질 수 있으며, 본 도구의 학습 데이터 기준으로 낮은 편입니다). 이는 파킨슨병에서 흔한 강도 감소(Hypophonia) 패턴과 유사하여 발성 훈련이 필요할 수 있습니다.")
     if sps >= 4.5: negatives.append(f"말속도가 {sps:.2f} SPS로 지나치게 빠릅니다. 이는 발화 제어가 어려워 말이 빠르지는 가속 징후(Short rushes of speech)일 가능성이 있습니다.")
     if artic < 70: negatives.append(f"청지각적 조음 정확도가 {artic}점으로 다소 낮습니다. 발음이 불분명해지는 조음 장애(Dysarthria) 징후가 관찰됩니다.")
     if vhi >= 20: negatives.append(f"VHI 총점이 {vhi}점으로 높습니다. 환자 스스로 음성 문제로 인한 생활의 불편함과 심리적 위축을 크게 느끼고 있습니다.")
@@ -788,7 +902,7 @@ if st.session_state.get('is_analyzed'):
         st.plotly_chart(st.session_state['fig_plotly'], use_container_width=True)
     
     with c2:
-        db_adj = st.slider("강도(dB) 보정", -50.0, 50.0, -10.0)
+        db_adj = st.slider("강도(dB) 보정", -50.0, 50.0, 0.0)
         final_db = st.session_state['mean_db'] + db_adj
         
         range_adj = st.slider("음도범위(Hz) 보정", 0.0, 300.0, float(st.session_state['pitch_range']))
@@ -884,7 +998,6 @@ if st.session_state.get('is_analyzed'):
             else:
                 input_1 = pd.DataFrame([[
                     st.session_state['f0_mean'], range_adj, final_db, final_sps,
-                    vhi_total, vhi_p, vhi_f, vhi_e,
                     sex_num_ui
                 ]], columns=FEATS_STEP1)
 
@@ -920,6 +1033,16 @@ if st.session_state.get('is_analyzed'):
                         pred_prob = float(probs_sub[j])
                         final_decision = pred_sub
 
+                        # --- Hybrid rule (서비스 안정성): '조음 집단' 우선 판정 ---
+                        # 조음만 문제인 패턴을 살리기 위해, 조음 정확도는 낮고(≤40) 속도 신호는 높지 않을 때(청지각 말속도≤60, SPS≤4.6) 조음 집단으로 우선 분류합니다.
+                        rule_artic = (p_artic is not None and p_rate is not None and final_sps is not None and
+                                      float(p_artic) <= 40 and float(p_rate) <= 60 and float(final_sps) <= 4.6)
+                        if rule_artic:
+                            pred_sub = "조음 집단"
+                            pred_prob = max(pred_prob, 0.80)
+                            final_decision = pred_sub
+                            st.warning("🧩 하이브리드 규칙 적용: 조음 정확도 저하(≤40) + 속도 신호 높지 않음 → **조음 집단**으로 우선 분류했습니다.")
+
                         st.info(f"➡️ PD 하위 집단 예측: **{pred_sub}** ({pred_prob*100:.1f}%)")
 
                         # ---- Spider/Radar chart: PD 하위집단 확률 시각화 (원래 UI 복원) ----
@@ -953,7 +1076,19 @@ if st.session_state.get('is_analyzed'):
                                         "집단": labels,
                                         "확률(%)": (np.array(probs_sub) * 100).round(1)
                                     }).sort_values("확률(%)", ascending=False)
-                                    st.dataframe(dfp, hide_index=True, use_container_width=True)
+                                    
+                                    # --- [설명 보강] 하위집단 분류에 기여한 상위 변수 TOP-3 ---
+                                    try:
+                                        x2_row = [final_db, final_sps, p_loud, p_rate, p_artic]
+                                        contrib2 = top_contrib_linear_multiclass(model_step2, x2_row, FEATS_STEP2, pred_sub, topk=3)
+                                        if contrib2:
+                                            st.markdown("**🔎 이 하위집단 판정에 크게 기여한 요소(Top 3)**")
+                                            for r in contrib2:
+                                                st.write(f"- {r}")
+                                    except Exception:
+                                        pass
+
+st.dataframe(dfp, hide_index=True, use_container_width=True)
                         except Exception as e:
                             st.warning(f"레이더 차트 생성 실패: {e}")
 
@@ -975,11 +1110,28 @@ if st.session_state.get('is_analyzed'):
             st.session_state.step1_meta = {"p_pd": p_pd, "p_normal": p_norm, "cutoff": pd_cut}
 
             # 해석 텍스트
+            st.caption('※ 자가보고(VHI)는 **판정 확률 계산에는 사용하지 않고**, 해석/경고를 위한 참고 지표로만 표시됩니다.')
             positives, negatives = generate_interpretation(prob_normal, final_db, final_sps, range_adj, p_artic, vhi_total, vhi_e)
+
+            # --- [설명 보강] 규칙 기반 설명이 비어있을 때: 모델 TOP 기여 변수로 최소 3개 생성 ---
+            try:
+                x1_row = [st.session_state.get('f0_mean'), range_adj, final_db, final_sps, sex_num_ui]
+                pos_auto, neg_auto = top_contrib_linear_binary(model_step1, x1_row, FEATS_STEP1, pos_label="Parkinson", topk=3)
+                # 정상 확률 설명이 비면(또는 너무 짧으면) 자동 설명을 섞어줌
+                if not positives or len(positives) < 1:
+                    positives = (positives or []) + (neg_auto[:3] if neg_auto else [])
+                # PD 가능성 이유가 비면 자동 설명(=PD 쪽 기여) 추가
+                if not negatives or len(negatives) < 1:
+                    negatives = (negatives or []) + (pos_auto[:3] if pos_auto else [])
+            except Exception:
+                pass
+
             st.markdown("##### ✅ 정상일 확률이 높게 나온 이유")
-            for p in positives: st.write(f"- {p}")
+            for p in positives: 
+                st.write(f"- {p}")
             st.markdown("##### ⚠️ 파킨슨 가능성이 존재하는 이유")
-            for n in negatives: st.write(f"- {n}")
+            for n in negatives: 
+                st.write(f"- {n}")
 
 
             # 저장/전송용 데이터 패키징
