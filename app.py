@@ -949,7 +949,12 @@ def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
             
             if len(clean_p) > 0:
                 mean_f0 = np.mean(clean_p)
-                rng = np.max(clean_p) - np.min(clean_p)
+                # Range는 max-min 대신 퍼센타일 기반(p95-p5)로 계산해 무성/이상치 영향 완화
+                if len(clean_p) >= 10:
+                    p5, p95 = np.percentile(clean_p, [5, 95])
+                else:
+                    p5, p95 = float(np.min(clean_p)), float(np.max(clean_p))
+                rng = float(max(0.0, p95 - p5))
             else:
                 mean_f0, rng = 0, 0
                 clean_p, clean_t = [], []
@@ -969,9 +974,18 @@ def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
         return fig, mean_f0, rng, duration
     except: return None, 0, 0, 0
 
-def run_analysis_logic(file_path):
+def run_analysis_logic(file_path, gender=None):
     try:
-        fig, f0, rng, dur = plot_pitch_contour_plotly(file_path, 70, 500)
+        g = (gender or "").strip().upper()
+        # 성별에 따라 Pitch 탐지 범위를 조정(남성: 낮은 floor, 여성: 높은 floor)
+        if g == "M":
+            f0_min, f0_max = 60, 300
+        elif g == "F":
+            f0_min, f0_max = 100, 500
+        else:
+            f0_min, f0_max = 70, 500
+
+        fig, f0, rng, dur = plot_pitch_contour_plotly(file_path, f0_min, f0_max)
         sound = parselmouth.Sound(file_path)
         intensity = sound.to_intensity()
         mean_db = call(intensity, "Get mean", 0, 0, "energy")
@@ -988,10 +1002,16 @@ def run_analysis_logic(file_path):
     except Exception as e:
         st.error(f"분석 오류: {e}"); return False
 
-def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e):
+def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e, sex=None):
     positives, negatives = [], []
     if vhi < 15: positives.append(f"환자 본인의 주관적 불편함(VHI {vhi}점)이 낮아, 일상 대화에 심리적/기능적 부담이 적은 상태입니다.")
-    if range_val >= 100: positives.append(f"음도 범위가 {range_val:.1f}Hz로 넓게 나타나, 목소리에 생동감이 있고 억양의 변화가 자연스럽습니다.")
+    # (임상 안정성) 남성은 정상에서도 음도범위가 상대적으로 좁을 수 있어 기준을 완화합니다.
+    try:
+        _sex = (sex or "").strip().upper()
+    except Exception:
+        _sex = ""
+    range_thr = 80 if _sex == "M" else 100
+    if range_val >= range_thr: positives.append(f"음도 범위가 {range_val:.1f}Hz로 넓게 나타나, 목소리에 생동감이 있고 억양의 변화가 자연스럽습니다.")
     if artic >= 75: positives.append(f"청지각적 조음 정확도가 {artic}점으로 양호하여, 상대방이 말을 알아듣기에 명료한 상태입니다.")
     if sps < 5.8: positives.append(f"말속도가 {sps:.2f} SPS로 측정되었습니다. 말속도는 안정적인 범위입니다.")
     if db >= 60: positives.append(f"평균 음성 강도가 {db:.1f} dB로, 일반적인 대화 수준(60dB 이상)의 성량을 튼튼하게 유지하고 있습니다.")
@@ -1050,7 +1070,7 @@ with col_rec:
         if audio_buf:
             with open(TEMP_FILENAME, "wb") as f: f.write(audio_buf.read())
             st.session_state.current_wav_path = os.path.join(os.getcwd(), TEMP_FILENAME)
-            run_analysis_logic(st.session_state.current_wav_path)
+            run_analysis_logic(st.session_state.current_wav_path, subject_gender)
         else: st.warning("녹음부터 해주세요.")
 
 with col_up:
@@ -1061,7 +1081,7 @@ with col_up:
         if up_file:
             with open(TEMP_FILENAME, "wb") as f: f.write(up_file.read())
             st.session_state.current_wav_path = os.path.join(os.getcwd(), TEMP_FILENAME)
-            run_analysis_logic(st.session_state.current_wav_path)
+            run_analysis_logic(st.session_state.current_wav_path, subject_gender)
         else: st.warning("파일을 올려주세요.")
 
 # 3. 결과 및 저장
@@ -1075,16 +1095,42 @@ if st.session_state.get('is_analyzed'):
         st.plotly_chart(st.session_state['fig_plotly'], use_container_width=True)
     
     with c2:
-        # 강도(dB) 보정: 기본값 -5 dB(권장). 필요 시 임상가가 조정할 수 있도록 슬라이더는 유지합니다.
-        INTENSITY_CORR_DB_DEFAULT = -5.0
-        lock_db = st.checkbox("강도 보정 고정(-5 dB) 사용(권장)", value=True, key="lock_db_corr",
-                             help="서비스 기본값은 -5 dB 고정입니다. 임상적으로 필요할 때만 해제하여 조정하세요.")
-        db_adj = st.slider("강도(dB) 보정", -50.0, 50.0, INTENSITY_CORR_DB_DEFAULT, 0.5, disabled=lock_db,
-                           help="마이크/환경에 따라 dB가 달라질 수 있습니다. 기본은 -5 dB 고정(권장)이며, 해제 시 수동 조정 가능합니다.")
+        # 강도(dB) 보정:
+        # - 기본은 0 dB(측정값 그대로)로 두고, 필요 시 임상가가 환경에 맞게 조정할 수 있도록 슬라이더를 제공합니다.
+        # - (옵션) 특정 환경에서 강도가 과대 측정되는 경우에만 -5 dB 고정을 사용할 수 있습니다.
+        INTENSITY_CORR_DB_DEFAULT = 0.0
+        INTENSITY_CORR_DB_LOCK_VALUE = -5.0
+
+        lock_db = st.checkbox(
+            "강도 보정 고정(-5 dB) 사용(옵션)",
+            value=False,
+            key="lock_db_corr",
+            help="녹음 강도가 과대 측정되는 환경에서만 -5 dB 고정을 사용하세요. 일반적으로는 0 dB(측정값 그대로)를 권장합니다."
+        )
+
         if lock_db:
-            db_adj = INTENSITY_CORR_DB_DEFAULT
+            st.slider(
+                "강도(dB) 보정",
+                -50.0, 50.0,
+                INTENSITY_CORR_DB_LOCK_VALUE,
+                0.5,
+                disabled=True,
+                key="db_adj_locked",
+                help="고정 모드에서는 -5 dB가 적용됩니다."
+            )
+            db_adj = INTENSITY_CORR_DB_LOCK_VALUE
+        else:
+            db_adj = st.slider(
+                "강도(dB) 보정",
+                -50.0, 50.0,
+                float(st.session_state.get("db_adj", INTENSITY_CORR_DB_DEFAULT)),
+                0.5,
+                key="db_adj",
+                help="마이크/환경에 따라 dB가 달라질 수 있습니다. 기본은 0 dB(측정값 그대로)이며 필요 시 수동 조정 가능합니다."
+            )
+            st.session_state["db_adj"] = db_adj
+
         final_db = st.session_state['mean_db'] + db_adj
-        
         range_adj = st.slider("음도범위(Hz) 보정", 0.0, 300.0, float(st.session_state['pitch_range']))
         s_time, e_time = st.slider("말속도 구간(초)", 0.0, st.session_state['duration'], (0.0, st.session_state['duration']), 0.01)
         sel_dur = max(0.1, e_time - s_time)
@@ -1238,6 +1284,8 @@ if st.session_state.get('is_analyzed'):
                             _top1_lbl, _top1_p, _top2_lbl, _top2_p, _is_mixed = pred_sub, float(pred_prob), None, 0.0, False
 
                         # --- 표시/하이브리드 보정용 확률/청지각 점수(안전 파싱) ---
+                        # Step2 클래스 확률을 라벨→확률 dict로 정리(이후 문구/혼합형 판단에 사용)
+                        probs_map = {str(lbl): float(p) for lbl, p in zip(sub_classes, probs_sub)}
                         def _safe_float(_x):
                             try:
                                 return float(_x) if (_x is not None and pd.notna(_x)) else None
@@ -1470,7 +1518,7 @@ if st.session_state.get('is_analyzed'):
 
             # 해석 텍스트
             st.caption('※ 자가보고(VHI)는 **판정 확률 계산에는 사용하지 않고**, 해석/경고를 위한 참고 지표로만 표시됩니다.')
-            positives, negatives = generate_interpretation(prob_normal, final_db, final_sps, range_adj, p_artic, vhi_total, vhi_e)
+            positives, negatives = generate_interpretation(prob_normal, final_db, final_sps, range_adj, p_artic, vhi_total, vhi_e, sex=subject_gender)
 
             # --- [설명 보강] 규칙 기반 설명이 비어있을 때: 모델 TOP 기여 변수로 최소 3개 생성 ---
             # --- 자동 설명(모델 기여도): 실패해도 이유가 비지 않도록 ---
