@@ -351,7 +351,7 @@ except:
 # ==========================================
 # [전역 설정] 폰트 및 변수
 # ==========================================
-FEATS_STEP1 = ['F0', 'RangeNorm', 'Intensity', 'SPS', 'Sex']  # Step1: Range는 성별/평균F0 영향을 받으므로 Range/F0 정규화 사용  # Step1 판정에는 VHI를 포함하지 않고(참고 지표로만 사용)
+FEATS_STEP1 = ['F0', 'Intensity', 'SPS', 'Sex']  # Step1: Range는 성별/평균F0 영향을 받으므로 Range/F0 정규화 사용  # Step1 판정에는 VHI를 포함하지 않고(참고 지표로만 사용)
 # Step2는 PD 하위집단 표본이 작아(특히 말속도 집단) 고차원 특성에 불안정합니다.
 # 임상적으로 구분력이 큰 핵심 변수(강도/말속도/조음)만 사용합니다.
 FEATS_STEP2 = ['Intensity', 'SPS', 'P_Loudness', 'P_Rate', 'P_Artic']
@@ -362,7 +362,15 @@ def sex_to_num(x):
     """성별을 숫자 feature로 변환: 남/M=1.0, 여/F=0.0, 그 외/결측=0.5"""
     if x is None:
         return 0.5
+    s = str(x).strip().lower()
+    if s in ["m", "male", "man", "남", "남성", "남자", "1"]:
+        return 1.0
+    if s in ["f", "female", "woman", "여", "여성", "여자", "0"]:
+        return 0.0
+    return 0.5
+
 # ==========================================
+
 # [training_data 위치 탐색]
 # - Streamlit Cloud/Linux는 대소문자 구분 + 실행 경로가 달라질 수 있어
 #   app.py(이 파일) 기준으로 training_data.*를 찾도록 합니다.
@@ -535,6 +543,8 @@ def compute_cutoffs_from_training(_file_mtime=None):
 
     y1_bin = (y1 == 'Parkinson').astype(int)
     step1_cutoff, step1_sens, step1_spec = _youden_cutoff(y1_bin, oof_pd)
+    # (안정성 우선) 과도한 오탐을 막기 위해 cut-off 하한을 둡니다.
+    step1_cutoff = float(max(step1_cutoff, 0.60))
 
     # ---------- Step2: PD 내부 3집단 cut-off (클래스별 OVR, LOO OOF) ----------
     df_pd = df[df["Diagnosis"] == "Parkinson"].copy()
@@ -1242,8 +1252,7 @@ if st.session_state.get('is_analyzed'):
                 
             else:
                 input_1 = pd.DataFrame([[
-                    st.session_state['f0_mean'], range_norm_ui, final_db, final_sps,
-                    sex_num_ui
+                    st.session_state['f0_mean'], final_db, final_sps, sex_num_ui
                 ]], columns=FEATS_STEP1)
 
                 proba_1 = model_step1.predict_proba(input_1.to_numpy())[0]
@@ -1541,7 +1550,7 @@ if st.session_state.get('is_analyzed'):
 
             # --- [설명 보강] 규칙 기반 설명이 비어있을 때: 모델 TOP 기여 변수로 최소 3개 생성 ---
             # --- 자동 설명(모델 기여도): 실패해도 이유가 비지 않도록 ---
-            x1_row = [st.session_state.get('f0_mean'), range_norm_ui, final_db, final_sps, sex_num_ui]
+            x1_row = [st.session_state.get('f0_mean'), final_db, final_sps, sex_num_ui]
             try:
                 pos_auto, neg_auto = top_contrib_linear_binary(model_step1, x1_row, FEATS_STEP1, pos_label="Parkinson", topk=3)
                 # 정상 확률 설명이 비면(또는 너무 짧으면) 자동 설명을 섞어줌
