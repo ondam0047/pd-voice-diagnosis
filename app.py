@@ -1245,7 +1245,7 @@ if st.session_state.get('is_analyzed'):
                             else:
                                 st.info(f"➡️ PD 하위 집단 예측 : **혼합형**으로 {_top1_lbl}에 포함될 가능성이 더 높으며, {_top2_lbl} 소견을 동반할 수 있습니다({_top1_lbl} {_top1_p*100:.1f}%, {_top2_lbl} {_top2_p*100:.1f}%).")
                         else:
-                            st.info(f"➡️ PD 하위 집단 예측: **{pred_sub_final}** ({pred_prob*100:.1f}%)")
+                            st.info(f"➡️ PD 하위 집단 예측: **{pred_sub}** ({pred_prob*100:.1f}%)")
 
                         # --- Hybrid 신호(임상 안정성): 라벨 '보정'은 하지 않고, 동반 가능성만 안내 ---
                         intensity_prob = float(probs_sub[list(sub_classes).index("강도 집단")]) if "강도 집단" in sub_classes else None
