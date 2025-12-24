@@ -224,6 +224,7 @@ st.set_page_config(page_title="파킨슨병 환자 하위유형 분류 프로그
 FEAT_LABELS_STEP1 = {
     "F0": "평균 음도(F0)",
     "Range": "음도 범위(range)",
+    "RangeNorm": "음도 범위/평균음도(Range/F0)",
     "Intensity": "평균 음성 강도(dB)",
     "SPS": "말속도(SPS)",
     "Sex": "성별"
@@ -350,7 +351,7 @@ except:
 # ==========================================
 # [전역 설정] 폰트 및 변수
 # ==========================================
-FEATS_STEP1 = ['F0', 'Range', 'Intensity', 'SPS', 'Sex']  # Step1 판정에는 VHI를 포함하지 않고(참고 지표로만 사용)
+FEATS_STEP1 = ['F0', 'RangeNorm', 'Intensity', 'SPS', 'Sex']  # Step1: Range는 성별/평균F0 영향을 받으므로 Range/F0 정규화 사용  # Step1 판정에는 VHI를 포함하지 않고(참고 지표로만 사용)
 # Step2는 PD 하위집단 표본이 작아(특히 말속도 집단) 고차원 특성에 불안정합니다.
 # 임상적으로 구분력이 큰 핵심 변수(강도/말속도/조음)만 사용합니다.
 FEATS_STEP2 = ['Intensity', 'SPS', 'P_Loudness', 'P_Rate', 'P_Artic']
@@ -497,7 +498,18 @@ def compute_cutoffs_from_training(_file_mtime=None):
             df[col] = df[col].fillna(0.0)
 
     # ---------- Step1: Normal vs PD cut-off (LOO OOF) ----------
-    X1 = df[FEATS_STEP1].copy()
+    
+# Step1 보강: Range(Hz)는 평균F0/성별의 영향을 크게 받습니다.
+# 학습/추정 모두에서 Range/F0 정규화(RangeNorm)를 사용해 성별 편향 및 F0 스케일 문제를 완화합니다.
+if 'RangeNorm' not in df.columns:
+    try:
+        _f0 = pd.to_numeric(df.get('F0'), errors='coerce')
+        _rng = pd.to_numeric(df.get('Range'), errors='coerce')
+        df['RangeNorm'] = (_rng / _f0.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
+    except Exception:
+        df['RangeNorm'] = np.nan
+
+X1 = df[FEATS_STEP1].copy()
     y1 = df["Diagnosis"].astype(str).values
 
     loo = LeaveOneOut()
@@ -1012,6 +1024,9 @@ def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e, 
         _sex = ""
     range_thr = 80 if _sex == "M" else 100
     if range_val >= range_thr: positives.append(f"음도 범위가 {range_val:.1f}Hz로 넓게 나타나, 목소리에 생동감이 있고 억양의 변화가 자연스럽습니다.")
+    else:
+        # 음도범위가 좁게 측정된 경우(특히 남성은 선천적으로 좁을 수 있음)
+        negatives.append(f"음도 범위가 {range_val:.1f}Hz로 좁게 측정되었습니다. 억양 변화가 단조롭게 나타나는 패턴은 PD 학습군과 겹칠 수 있으나, 과제(짧은 문장/단음절)나 Pitch 추정 불안정에서도 발생할 수 있어 재측정이 권장됩니다.")
     if artic >= 75: positives.append(f"청지각적 조음 정확도가 {artic}점으로 양호하여, 상대방이 말을 알아듣기에 명료한 상태입니다.")
     if sps < 5.8: positives.append(f"말속도가 {sps:.2f} SPS로 측정되었습니다. 말속도는 안정적인 범위입니다.")
     if db >= 60: positives.append(f"평균 음성 강도가 {db:.1f} dB로, 일반적인 대화 수준(60dB 이상)의 성량을 튼튼하게 유지하고 있습니다.")
@@ -1133,6 +1148,9 @@ if st.session_state.get('is_analyzed'):
 
         final_db = st.session_state['mean_db'] + db_adj
         range_adj = st.slider("음도범위(Hz) 보정", 0.0, 300.0, float(st.session_state['pitch_range']))
+        # 모델 입력용: Range(Hz) 정규화(Range/F0)로 성별/평균F0 스케일 영향을 완화
+        _f0_for_norm = float(st.session_state.get('f0_mean', 0) or 0)
+        range_norm_ui = float(range_adj) / max(_f0_for_norm, 1e-6)
         s_time, e_time = st.slider("말속도 구간(초)", 0.0, st.session_state['duration'], (0.0, st.session_state['duration']), 0.01)
         sel_dur = max(0.1, e_time - s_time)
         final_sps = st.session_state.user_syllables / sel_dur
@@ -1224,7 +1242,7 @@ if st.session_state.get('is_analyzed'):
                 
             else:
                 input_1 = pd.DataFrame([[
-                    st.session_state['f0_mean'], range_adj, final_db, final_sps,
+                    st.session_state['f0_mean'], range_norm_ui, final_db, final_sps,
                     sex_num_ui
                 ]], columns=FEATS_STEP1)
 
@@ -1523,7 +1541,7 @@ if st.session_state.get('is_analyzed'):
 
             # --- [설명 보강] 규칙 기반 설명이 비어있을 때: 모델 TOP 기여 변수로 최소 3개 생성 ---
             # --- 자동 설명(모델 기여도): 실패해도 이유가 비지 않도록 ---
-            x1_row = [st.session_state.get('f0_mean'), range_adj, final_db, final_sps, sex_num_ui]
+            x1_row = [st.session_state.get('f0_mean'), range_norm_ui, final_db, final_sps, sex_num_ui]
             try:
                 pos_auto, neg_auto = top_contrib_linear_binary(model_step1, x1_row, FEATS_STEP1, pos_label="Parkinson", topk=3)
                 # 정상 확률 설명이 비면(또는 너무 짧으면) 자동 설명을 섞어줌
@@ -1589,7 +1607,11 @@ if st.session_state.get('is_analyzed'):
                 if ("pos_auto" in locals()) and pos_auto:
                     negatives = pos_auto[:3]
                 else:
-                    negatives = [f"PD 확률이 cut-off({pd_cut:.2f}) 근처입니다(PD={p_pd*100:.1f}%). 재측정/추가 평가로 확인이 필요합니다."]
+                    dist = abs(p_pd - pd_cut)
+                    if dist <= 0.05:
+                        negatives = [f"PD 확률이 cut-off({pd_cut:.2f}) 근처입니다(PD={p_pd*100:.1f}%). 재측정/추가 평가로 확인이 필요합니다."]
+                    else:
+                        negatives = [f"PD 확률이 cut-off({pd_cut:.2f})를 초과했습니다(PD={p_pd*100:.1f}%). 음향 지표 중 일부가 PD 학습군과 겹칠 수 있어 재측정/추가 평가로 확인이 필요합니다."]
             # 타이틀 톤: 더 높은 쪽(주결론) 먼저 보여주기
             primary_is_pd = bool(p_pd >= pd_cut)
 
