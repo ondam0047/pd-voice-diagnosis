@@ -1239,14 +1239,22 @@ if st.session_state.get('is_analyzed'):
                             pred_sub_display = f"혼합형({_top1_lbl} 우세, {_top2_lbl} 동반)"
 
                         if _is_mixed and (_top2_lbl is not None):
-                            st.info(f"➡️ PD 하위 집단 추정: **{pred_sub_display}**  (Top1: {_top1_lbl} {_top1_p*100:.1f}%, Top2: {_top2_lbl} {_top2_p*100:.1f}%)")
+                            # 혼합형(임상용) 문구: 우세/동반을 명시
+                            if (_top1_lbl == "강도 집단") and (_top2_lbl == "조음 집단"):
+                                st.info(f"➡️ PD 하위 집단 예측: **혼합형(강도 집단 우세, 조음 집단 동반)** (Top1: 강도 집단 {_top1_p*100:.1f}%, Top2: 조음 집단 {_top2_p*100:.1f}%). **강도 집단에 포함될 가능성이 더 높으며, 조음 문제를 동반할 수 있습니다.**")
+                            else:
+                                st.info(f"➡️ PD 하위 집단 예측: **혼합형({_top1_lbl} 우세, {_top2_lbl} 동반)** (Top1: {_top1_lbl} {_top1_p*100:.1f}%, Top2: {_top2_lbl} {_top2_p*100:.1f}%). **Top1 범주 가능성이 더 높지만 Top2 소견도 동반될 수 있습니다.**")
                         else:
-                            st.info(f"➡️ PD 하위 집단 예측: **{pred_sub}** ({pred_prob*100:.1f}%)")
+                            st.info(f"➡️ PD 하위 집단 예측: **{pred_sub_final}** ({pred_prob*100:.1f}%)")
 
                         # --- Hybrid 신호(임상 안정성): 라벨 '보정'은 하지 않고, 동반 가능성만 안내 ---
                         intensity_prob = float(probs_sub[list(sub_classes).index("강도 집단")]) if "강도 집단" in sub_classes else None
                         jo_prob = float(probs_sub[list(sub_classes).index("조음 집단")]) if "조음 집단" in sub_classes else None
                         rate_prob = float(probs_sub[list(sub_classes).index("말속도 집단")]) if "말속도 집단" in sub_classes else None
+
+                        # 청지각 조음정확도(0-100) 점수: 슬라이더 입력값(p_artic) 사용
+
+                        percep_artic_score = float(p_artic) if 'p_artic' in locals() and p_artic is not None else None
 
                         rule_artic = (percep_artic_score is not None) and (percep_artic_score <= 40) and ((rate_prob is None) or (rate_prob < 0.45))
                         if rule_artic and pred_sub == "강도 집단" and jo_prob is not None and jo_prob > 0:
@@ -1402,7 +1410,10 @@ if st.session_state.get('is_analyzed'):
                         pred_sub_ref_display = f"혼합형({_top1_lbl_r} 우세, {_top2_lbl_r} 동반)"
 
                     if _is_mixed_r and (_top2_lbl_r is not None):
-                        st.info(f"➡️ PD 하위 집단 예측(참고): **{pred_sub_ref_display}**  (Top1: {_top1_lbl_r} {_top1_p_r*100:.1f}%, Top2: {_top2_lbl_r} {_top2_p_r*100:.1f}%)")
+                        if (_top1_lbl_r == "강도 집단") and (_top2_lbl_r == "조음 집단"):
+                            st.info(f"➡️ PD 하위 집단 예측(참고): **혼합형(강도 집단 우세, 조음 집단 동반)** (Top1: 강도 집단 {_top1_p_r*100:.1f}%, Top2: 조음 집단 {_top2_p_r*100:.1f}%). **강도 집단 가능성이 더 높고, 조음 저하가 동반될 수 있습니다.**")
+                        else:
+                            st.info(f"➡️ PD 하위 집단 예측(참고): **혼합형({_top1_lbl_r} 우세, {_top2_lbl_r} 동반)** (Top1: {_top1_lbl_r} {_top1_p_r*100:.1f}%, Top2: {_top2_lbl_r} {_top2_p_r*100:.1f}%).")
                     else:
                         st.info(f"➡️ PD 하위 집단 예측(참고): **{pred_sub_ref_final}** ({pred_prob_ref*100:.1f}%)")
 
@@ -1410,6 +1421,8 @@ if st.session_state.get('is_analyzed'):
                     intensity_prob_ref = float(probs_sub_ref[list(sub_classes_ref).index("강도 집단")]) if "강도 집단" in sub_classes_ref else None
                     jo_prob_ref = float(probs_sub_ref[list(sub_classes_ref).index("조음 집단")]) if "조음 집단" in sub_classes_ref else None
                     rate_prob_ref = float(probs_sub_ref[list(sub_classes_ref).index("말속도 집단")]) if "말속도 집단" in sub_classes_ref else None
+
+                    percep_artic_score_ref = float(p_artic) if 'p_artic' in locals() and p_artic is not None else None
 
                     rule_artic_ref = (percep_artic_score_ref is not None) and (percep_artic_score_ref <= 40) and ((rate_prob_ref is None) or (rate_prob_ref < 0.45))
                     if rule_artic_ref and pred_sub_ref == "강도 집단" and jo_prob_ref is not None and jo_prob_ref > 0:
