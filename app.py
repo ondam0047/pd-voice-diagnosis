@@ -351,7 +351,7 @@ except:
 # ==========================================
 # [전역 설정] 폰트 및 변수
 # ==========================================
-FEATS_STEP1 = ['F0', 'Intensity', 'SPS', 'Sex']  # Step1: Range는 성별/평균F0 영향을 받으므로 Range/F0 정규화 사용  # Step1 판정에는 VHI를 포함하지 않고(참고 지표로만 사용)
+FEATS_STEP1 = ['F0', 'Range', 'Intensity', 'SPS', 'Sex']  # Step1: Range는 성별/평균F0 영향을 받으므로 Range/F0 정규화 사용  # Step1 판정에는 VHI를 포함하지 않고(참고 지표로만 사용)
 # Step2는 PD 하위집단 표본이 작아(특히 말속도 집단) 고차원 특성에 불안정합니다.
 # 임상적으로 구분력이 큰 핵심 변수(강도/말속도/조음)만 사용합니다.
 FEATS_STEP2 = ['Intensity', 'SPS', 'P_Loudness', 'P_Rate', 'P_Artic']
@@ -762,6 +762,25 @@ def train_models():
         y1.append(diag)
 
     X1 = np.array(X1_rows, dtype=float)
+    
+    # Step1 학습 데이터 기반 기준값(가드/해석용)
+    # Range는 성별/과제/무성구간 처리에 민감해 정상 오탐을 유발할 수 있어,
+    # "정상 케이스 + 다른 지표 양호" 조건에서 중립값으로 대체하는 가드에 사용합니다.
+    try:
+        X1_arr = np.array(X1_rows, dtype=float)
+        _range_all = X1_arr[:, 1]
+        _sex_all = X1_arr[:, 4]
+        median_range_all = float(np.nanmedian(_range_all))
+        median_range_m = float(np.nanmedian(_range_all[_sex_all == 0])) if np.any(_sex_all == 0) else median_range_all
+        median_range_f = float(np.nanmedian(_range_all[_sex_all == 1])) if np.any(_sex_all == 1) else median_range_all
+        globals()['STATS_STEP1'] = {
+            "median_range_all": median_range_all,
+            "median_range_m": median_range_m,
+            "median_range_f": median_range_f,
+        }
+    except Exception:
+        globals()['STATS_STEP1'] = {"median_range_all": 100.0, "median_range_m": 90.0, "median_range_f": 120.0}
+
     y1 = np.array(y1, dtype=str)
 
     from sklearn.pipeline import Pipeline
@@ -1241,6 +1260,12 @@ if st.session_state.get('is_analyzed'):
             if CUTS and isinstance(CUTS, dict) and "step1_cutoff" in CUTS and CUTS["step1_cutoff"] is not None:
                 pd_cut = float(CUTS["step1_cutoff"])
 
+            # cut-off 하한(임상 안정성): 과도한 오탐 방지
+            try:
+                pd_cut = max(float(pd_cut), 0.60)
+            except Exception:
+                pd_cut = 0.60
+
             # 기본값(저장용)
             p_pd = 0.0
             p_norm = 1.0
@@ -1251,8 +1276,51 @@ if st.session_state.get('is_analyzed'):
                 
                 
             else:
+                # Step1 입력 구성(안정성 가드 포함)
+                f0_in = _safe_float(st.session_state.get('f0_mean'))
+                pr_in = _safe_float(st.session_state.get('pitch_range'))
+                db_in = _safe_float(final_db)
+                sps_in = _safe_float(final_sps)
+
+                # Range(음도범위)는 정상 발화에서도 과제/무성구간/추정 실패로 작게 나올 수 있어
+                # '정상 정황이 강한 경우'에는 학습데이터 중앙값으로 대체하여 오탐을 줄입니다.
+                try:
+                    vhi_now = float(st.session_state.get('vhi_total', 0.0) or 0.0)
+                except Exception:
+                    vhi_now = 0.0
+                try:
+                    artic_now = float(st.session_state.get('p_artic', 0.0) or 0.0)
+                except Exception:
+                    artic_now = 0.0
+
+                sex_is_m = str(subject_gender).strip().lower() in ['m', 'male', '남', '남성']
+                sex_is_f = str(subject_gender).strip().lower() in ['f', 'female', '여', '여성']
+
+                if pr_in is None or (isinstance(pr_in, float) and not np.isfinite(pr_in)):
+                    pr_used = None
+                else:
+                    pr_used = float(pr_in)
+
+                # 정상 정황: VHI 낮음 + 청지각 조음 양호 + 강도/말속도 극단 아님
+                normal_context = (vhi_now <= 3.0) and (artic_now >= 70.0) and (db_in is not None and db_in >= 65.0) and (sps_in is not None and sps_in <= 5.8)
+
+                if normal_context and pr_used is not None:
+                    # 성별별 중앙값 사용(없으면 전체 중앙값)
+                    med_all = float(globals().get('STATS_STEP1', {}).get('median_range_all', 100.0))
+                    med_m = float(globals().get('STATS_STEP1', {}).get('median_range_m', med_all))
+                    med_f = float(globals().get('STATS_STEP1', {}).get('median_range_f', med_all))
+                    med = med_m if sex_is_m else (med_f if sex_is_f else med_all)
+
+                    # 너무 좁게 측정된 경우에만 중립값으로 대체
+                    if sex_is_m and pr_used < 70.0:
+                        pr_used = med
+                    elif sex_is_f and pr_used < 90.0:
+                        pr_used = med
+                    elif (not sex_is_m and not sex_is_f) and pr_used < 80.0:
+                        pr_used = med
+
                 input_1 = pd.DataFrame([[
-                    st.session_state['f0_mean'], final_db, final_sps, sex_num_ui
+                    f0_in, pr_used, db_in, sps_in, sex_num_ui
                 ]], columns=FEATS_STEP1)
 
                 proba_1 = model_step1.predict_proba(input_1.to_numpy())[0]
