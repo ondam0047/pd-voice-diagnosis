@@ -361,8 +361,6 @@ def sex_to_num(x):
     """성별을 숫자 feature로 변환: 남/M=1.0, 여/F=0.0, 그 외/결측=0.5"""
     if x is None:
         return 0.5
-
-
 # ==========================================
 # [training_data 위치 탐색]
 # - Streamlit Cloud/Linux는 대소문자 구분 + 실행 경로가 달라질 수 있어
@@ -391,15 +389,6 @@ def get_training_file():
     for p in base.rglob("training_data.xlsx"):
         return p
     return None
-
-    s = str(x).strip().lower()
-    if s in ["남", "남성", "남자", "m", "male", "man", "1"]:
-        return 1.0
-    if s in ["여", "여성", "여자", "f", "female", "woman", "0", "2"]:
-        return 0.0
-    return 0.5
-
-
 @st.cache_resource
 
 def _youden_cutoff(y_true, scores):
@@ -493,7 +482,7 @@ def compute_cutoffs_from_training(_file_mtime=None):
             diagnosis, subgroup
         ])
 
-    df = pd.DataFrame(data_list, columns=FEATS_STEP2 + ['Diagnosis', 'Subgroup'])
+    df = pd.DataFrame(data_list, columns=['F0','Range','Intensity','SPS','VHI_Total','VHI_P','VHI_F','VHI_E','Sex','P_Pitch','P_Range','P_Loudness','P_Rate','P_Artic','Diagnosis','Subgroup'])
 
     # 숫자 변환/결측 처리
     for col in FEATS_STEP2:
@@ -508,7 +497,7 @@ def compute_cutoffs_from_training(_file_mtime=None):
             df[col] = df[col].fillna(0.0)
 
     # ---------- Step1: Normal vs PD cut-off (LOO OOF) ----------
-    X1 = df[FEATS_STEP1].copy().to_numpy()
+    X1 = df[FEATS_STEP1].copy()
     y1 = df["Diagnosis"].astype(str).values
 
     loo = LeaveOneOut()
@@ -541,7 +530,7 @@ def compute_cutoffs_from_training(_file_mtime=None):
     step2_report = None
 
     if len(df_pd) >= 3:
-        X2 = df_pd[FEATS_STEP2].copy().to_numpy()
+        X2 = df_pd[FEATS_STEP2].copy()
         y2 = df_pd["Subgroup"].astype(str).values
         classes = np.unique(y2)
         class_to_idx = {c: i for i, c in enumerate(classes)}
@@ -582,7 +571,7 @@ def compute_cutoffs_from_training(_file_mtime=None):
 
     # Step1 혼동행렬(확률 cut-off 적용)
     y_pred1 = (oof_pd >= step1_cutoff).astype(int)
-    step1_cm = confusion_matrix(y1, y_pred1, labels=[0, 1])  # 0=Normal,1=PD
+    step1_cm = confusion_matrix(y1_bin, y_pred1, labels=[0, 1])  # 0=Normal,1=PD
 
     return {
         "step1_cutoff": float(step1_cutoff),
@@ -1004,11 +993,11 @@ def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e):
     if vhi < 15: positives.append(f"환자 본인의 주관적 불편함(VHI {vhi}점)이 낮아, 일상 대화에 심리적/기능적 부담이 적은 상태입니다.")
     if range_val >= 100: positives.append(f"음도 범위가 {range_val:.1f}Hz로 넓게 나타나, 목소리에 생동감이 있고 억양의 변화가 자연스럽습니다.")
     if artic >= 75: positives.append(f"청지각적 조음 정확도가 {artic}점으로 양호하여, 상대방이 말을 알아듣기에 명료한 상태입니다.")
-    if sps < 4.5: positives.append(f"말속도가 {sps:.2f} SPS로 측정되었습니다. 파킨슨병에서 흔히 나타나는 급격한 가속 현상(Festination) 없이 안정적인 속도를 유지하고 있습니다.")
+    if sps < 5.8: positives.append(f"말속도가 {sps:.2f} SPS로 측정되었습니다. 말속도는 안정적인 범위입니다.")
     if db >= 60: positives.append(f"평균 음성 강도가 {db:.1f} dB로, 일반적인 대화 수준(60dB 이상)의 성량을 튼튼하게 유지하고 있습니다.")
 
     if db < 60: negatives.append(f"평균 음성 강도가 {db:.1f} dB로 낮게 측정되었습니다(※ 마이크/거리/환경에 따라 절대값은 달라질 수 있으며, 본 도구의 모델 기준으로 낮은 편입니다). 이는 파킨슨병에서 흔한 강도 감소(Hypophonia) 패턴과 유사하여 발성 훈련이 필요할 수 있습니다.")
-    if sps >= 4.5: negatives.append(f"말속도가 {sps:.2f} SPS로 지나치게 빠릅니다. 이는 발화 제어가 어려워 말이 빠르지는 가속 징후(Short rushes of speech)일 가능성이 있습니다.")
+    if sps >= 5.8: negatives.append(f"말속도가 {sps:.2f} SPS로 빠른 편입니다. 정상 성인에서도 빠른 말속도는 나타날 수 있으나, 일부 PD 학습군의 말속도/리듬 특징과 겹칠 수 있어 추가 확인이 필요합니다.")
     if artic < 70: negatives.append(f"청지각적 조음 정확도가 {artic}점으로 다소 낮습니다. 발음이 불분명해지는 조음 장애(Dysarthria) 징후가 관찰됩니다.")
     if vhi >= 20: negatives.append(f"VHI 총점이 {vhi}점으로 높습니다. 환자 스스로 음성 문제로 인한 생활의 불편함과 심리적 위축을 크게 느끼고 있습니다.")
     if vhi_e >= 5: negatives.append("특히 VHI 정서(E) 점수가 높아, 말하기에 대한 불안감이나 자신감 저하가 감지됩니다.")
@@ -1203,6 +1192,14 @@ if st.session_state.get('is_analyzed'):
 
                 prob_normal = p_norm * 100.0
 
+                # (임상 안정성) 남성에서 음도 범위가 선천적으로 좁을 수 있어,
+                # 컷오프 근처에서는 Range 단독 신호가 과대 반영되지 않도록 p_pd를 아주 소폭 완화합니다.
+                try:
+                    if (subject_gender == "M") and (range_adj < 90) and (p_pd < (pd_cut + 0.07)):
+                        p_pd = max(0.0, p_pd - 0.07)
+                        prob_normal = (1.0 - p_pd) * 100.0
+                except Exception:
+                    pass
                 # cut-off 기준으로 판정
                 if p_pd >= pd_cut:
                     kind, headline, band_code = step1_screening_band(p_pd, pd_cut)
@@ -1354,8 +1351,8 @@ if st.session_state.get('is_analyzed'):
                     except Exception:
                         pass
                     try:
-                        if final_sps is not None and float(final_sps) >= 4.6:
-                            red_flags.append("말속도(SPS) 빠름")
+                        if (p_pd >= (pd_cut - 0.10)) and (final_sps is not None) and (float(final_sps) >= 5.8):
+                            red_flags.append("말속도(SPS) 빠름(≥5.8, 컷오프 근처)")
                     except Exception:
                         pass
                     try:
