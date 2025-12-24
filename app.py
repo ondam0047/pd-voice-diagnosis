@@ -209,6 +209,24 @@ def explain_step1_by_training(stats, x_dict, topk=3):
 
     return reasons_n[:topk], reasons_pd_strict[:topk], reasons_pd_closest[:topk]
 
+# --- 공통 유틸: 숫자 안전 변환 ---
+def _safe_float(x, default=None):
+    """Convert to float safely. Returns `default` on failure or missing/NaN."""
+    try:
+        if x is None:
+            return default
+        # pandas / numpy NaN 처리
+        try:
+            if pd.isna(x):
+                return default
+        except Exception:
+            pass
+        return float(x)
+    except Exception:
+        return default
+
+
+
 
 # --- 페이지 기본 설정 ---
 st.set_page_config(page_title="파킨슨병 환자 하위유형 분류 프로그램", layout="wide")
@@ -1278,7 +1296,7 @@ if st.session_state.get('is_analyzed'):
             else:
                 # Step1 입력 구성(안정성 가드 포함)
                 f0_in = _safe_float(st.session_state.get('f0_mean'))
-                pr_in = _safe_float(st.session_state.get('pitch_range'))
+                pr_in = _safe_float(locals().get('range_adj', st.session_state.get('pitch_range')))
                 db_in = _safe_float(final_db)
                 sps_in = _safe_float(final_sps)
 
@@ -1300,6 +1318,7 @@ if st.session_state.get('is_analyzed'):
                     pr_used = None
                 else:
                     pr_used = float(pr_in)
+                pr_raw = pr_used  # 원본 Range(Hz)
 
                 # 정상 정황: VHI 낮음 + 청지각 조음 양호 + 강도/말속도 극단 아님
                 normal_context = (vhi_now <= 3.0) and (artic_now >= 70.0) and (db_in is not None and db_in >= 65.0) and (sps_in is not None and sps_in <= 5.8)
@@ -1318,6 +1337,14 @@ if st.session_state.get('is_analyzed'):
                         pr_used = med
                     elif (not sex_is_m and not sex_is_f) and pr_used < 80.0:
                         pr_used = med
+
+                # 디버그/투명성: Step1에 실제로 사용된 Range 기록
+                try:
+                    st.session_state['step1_range_raw'] = pr_raw
+                    st.session_state['step1_range_used'] = pr_used
+                    st.session_state['step1_range_guard'] = bool(normal_context and pr_raw is not None and pr_used != pr_raw)
+                except Exception:
+                    pass
 
                 input_1 = pd.DataFrame([[
                     f0_in, pr_used, db_in, sps_in, sex_num_ui
@@ -1382,17 +1409,6 @@ if st.session_state.get('is_analyzed'):
                         # --- 표시/하이브리드 보정용 확률/청지각 점수(안전 파싱) ---
                         # Step2 클래스 확률을 라벨→확률 dict로 정리(이후 문구/혼합형 판단에 사용)
                         probs_map = {str(lbl): float(p) for lbl, p in zip(sub_classes, probs_sub)}
-                        def _safe_float(_x):
-                            try:
-                                return float(_x) if (_x is not None and pd.notna(_x)) else None
-                            except Exception:
-                                return None
-                        
-                        intensity_prob = _safe_float(probs_map.get("강도 집단"))
-                        jo_prob        = _safe_float(probs_map.get("조음 집단"))
-                        rate_prob      = _safe_float(probs_map.get("말속도 집단"))
-                        
-                        percep_artic_score = _safe_float(locals().get("p_artic"))
                         percep_rate_score  = _safe_float(locals().get("p_rate"))
                         
                         # --- 말속도→조음 보정(임상 우선): 조음이 매우 낮고(≤25), 속도 청지각 신호가 높지 않으면(≤60) 조음으로 해석 ---
@@ -1611,6 +1627,14 @@ if st.session_state.get('is_analyzed'):
 
             # Step1 메타(저장/로그용)
             st.session_state.step1_meta = {"p_pd": p_pd, "p_normal": p_norm, "cutoff": pd_cut}
+            # Range 가드가 적용되었는지(오탐 방지) 사용자에게 투명하게 표시
+            try:
+                if st.session_state.get('step1_range_guard'):
+                    raw_r = st.session_state.get('step1_range_raw')
+                    used_r = st.session_state.get('step1_range_used')
+                    st.info(f"⚙️ 음도범위가 정상 정황에서 과도하게 좁게 측정되어(원본 {raw_r:.1f}Hz) 모델 입력은 중립값({used_r:.1f}Hz)으로 보정했습니다. (오탐 방지)")
+            except Exception:
+                pass
 
             # 해석 텍스트
             st.caption('※ 자가보고(VHI)는 **판정 확률 계산에는 사용하지 않고**, 해석/경고를 위한 참고 지표로만 표시됩니다.')
@@ -1618,7 +1642,7 @@ if st.session_state.get('is_analyzed'):
 
             # --- [설명 보강] 규칙 기반 설명이 비어있을 때: 모델 TOP 기여 변수로 최소 3개 생성 ---
             # --- 자동 설명(모델 기여도): 실패해도 이유가 비지 않도록 ---
-            x1_row = [st.session_state.get('f0_mean'), final_db, final_sps, sex_num_ui]
+            x1_row = [st.session_state.get('f0_mean'), st.session_state.get('step1_range_used', range_adj if 'range_adj' in locals() else st.session_state.get('pitch_range')), final_db, final_sps, sex_num_ui]
             try:
                 pos_auto, neg_auto = top_contrib_linear_binary(model_step1, x1_row, FEATS_STEP1, pos_label="Parkinson", topk=3)
                 # 정상 확률 설명이 비면(또는 너무 짧으면) 자동 설명을 섞어줌
@@ -1658,7 +1682,7 @@ if st.session_state.get('is_analyzed'):
             stats_step1 = get_step1_training_stats(_file_mtime=train_mtime)
             x_dict = {
                 "F0": st.session_state.get("f0_mean", np.nan),
-                "Range": range_adj,
+                "Range": st.session_state.get("step1_range_used", range_adj),
                 "강도(dB)": final_db,
                 "SPS": final_sps,
             }
