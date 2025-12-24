@@ -1448,81 +1448,81 @@ if st.session_state.get('is_analyzed'):
                 positives = ["입력값들이 학습 데이터 기준에서 정상 범위에 비교적 가깝게 나타났습니다."]
             # negatives(=PD 가능성 근거)는 학습데이터 기반/규칙 기반 근거를 합친 뒤에도 비어있을 수 있어,
             # 여기서는 미리 채우지 않고 아래에서 '공란 방지' 로직으로 안전하게 보강합니다.
-# --- Step1 해석 타이틀/순서(확률 구간에 따라) + 설명 공란 방지 ---
-                band_code = st.session_state.get("step1_band_code", None)
+            # --- Step1 해석 타이틀/순서(확률 구간에 따라) + 설명 공란 방지 ---
+            band_code = st.session_state.get("step1_band_code", None)
 
-                # 학습데이터 기반 '가까움' 설명(안전장치)
-                training_path = get_training_file()
-                train_mtime = None
-                if training_path and os.path.exists(training_path):
-                    try:
-                        train_mtime = os.path.getmtime(training_path)
-                    except Exception:
-                        train_mtime = None
+            # 학습데이터 기반 '가까움' 설명(안전장치)
+            training_path = get_training_file()
+            train_mtime = None
+            if training_path and os.path.exists(training_path):
+                try:
+                    train_mtime = os.path.getmtime(training_path)
+                except Exception:
+                    train_mtime = None
 
-                stats_step1 = get_step1_training_stats(_file_mtime=train_mtime)
-                x_dict = {
-                    "F0": st.session_state.get("f0_mean", np.nan),
-                    "Range": range_adj,
-                    "강도(dB)": final_db,
-                    "SPS": final_sps,
-                }
-                n_like, pd_like_strict, pd_like_closest = explain_step1_by_training(stats_step1, x_dict, topk=3)
+            stats_step1 = get_step1_training_stats(_file_mtime=train_mtime)
+            x_dict = {
+                "F0": st.session_state.get("f0_mean", np.nan),
+                "Range": range_adj,
+                "강도(dB)": final_db,
+                "SPS": final_sps,
+            }
+            n_like, pd_like_strict, pd_like_closest = explain_step1_by_training(stats_step1, x_dict, topk=3)
 
-                # 학습데이터(중앙값) 기반 근거를 보강
-                if n_like:
-                    positives = list(dict.fromkeys((positives or []) + n_like))
+            # 학습데이터(중앙값) 기반 근거를 보강
+            if n_like:
+                positives = list(dict.fromkeys((positives or []) + n_like))
 
-                # PD 근거는 '명확히 PD쪽'이 있으면 우선 사용, 없고 cut-off 근처(경계)라면
-                # 'PD 중앙값과 상대적으로 가까운 항목'을 보여줘서 공란을 방지합니다.
-                borderline = abs(p_pd - pd_cut) <= 0.10
-                pd_like = pd_like_strict if pd_like_strict else (pd_like_closest if borderline else [])
-                if pd_like:
-                    negatives = list(dict.fromkeys((negatives or []) + pd_like))
+            # PD 근거는 '명확히 PD쪽'이 있으면 우선 사용, 없고 cut-off 근처(경계)라면
+            # 'PD 중앙값과 상대적으로 가까운 항목'을 보여줘서 공란을 방지합니다.
+            borderline = abs(p_pd - pd_cut) <= 0.10
+            pd_like = pd_like_strict if pd_like_strict else (pd_like_closest if borderline else [])
+            if pd_like:
+                negatives = list(dict.fromkeys((negatives or []) + pd_like))
 
-                # 컷오프 근처이면 첫 줄을 경계 안내로 고정(그리고 아래에 "어떤 지표"인지 반드시 보여줌)
-                if borderline:
-                    border_note = f"PD 확률이 cut-off({pd_cut:.2f}) 근처의 **경계 구간**입니다(PD={p_pd*100:.1f}%). 아래 지표를 중심으로 추가 평가/재측정을 권장합니다."
-                    # 경계인데도 negatives가 비어있으면(입력 누락/통계 없음) 한 줄은 보장
-                    if not negatives:
-                        negatives = ["(입력값/학습데이터 통계가 충분하지 않아 특정 지표를 제시하기 어렵습니다. 동일 조건으로 재측정 후 비교하세요.)"]
-                    negatives = [border_note] + [t for t in negatives if t != border_note]
-
-                # 그래도 비면(학습통계가 없거나 입력 누락) 최소 1문장 보장
+            # 컷오프 근처이면 첫 줄을 경계 안내로 고정(그리고 아래에 "어떤 지표"인지 반드시 보여줌)
+            if borderline:
+                border_note = f"PD 확률이 cut-off({pd_cut:.2f}) 근처의 **경계 구간**입니다(PD={p_pd*100:.1f}%). 아래 지표를 중심으로 추가 평가/재측정을 권장합니다."
+                # 경계인데도 negatives가 비어있으면(입력 누락/통계 없음) 한 줄은 보장
                 if not negatives:
-                    if p_pd >= pd_cut:
-                        negatives = [f"PD 확률이 cut-off({pd_cut:.2f})를 넘었습니다(PD={p_pd*100:.1f}%). 일부 지표가 PD 학습군과 유사할 수 있어 추가 평가/추적을 권장합니다."]
-                    else:
-                        negatives = [f"PD 확률은 낮지만(PD={p_pd*100:.1f}%), 일부 지표가 PD 학습군과 유사할 수 있어 추적 관찰을 권장합니다."]
-# 타이틀 톤: 더 높은 쪽(주결론) 먼저 보여주기
-                primary_is_pd = bool(p_pd >= pd_cut)
+                    negatives = ["(입력값/학습데이터 통계가 충분하지 않아 특정 지표를 제시하기 어렵습니다. 동일 조건으로 재측정 후 비교하세요.)"]
+                negatives = [border_note] + [t for t in negatives if t != border_note]
 
-                band_suffix = {
-                    "normal_very_high": "(매우 높음)",
-                    "normal_high": "(높음)",
-                    "border_mixed": "(경계)",
-                    "border_cutoff": "(컷오프 근처)",
-                    "pd_possible": "(가능성)",
-                    "pd_high": "(높음)",
-                    "pd_very_high": "(매우 높음)",
-                }.get(band_code, "")
-
-                if primary_is_pd:
-                    title_primary = f"##### 🔴 파킨슨 가능성을 시사하는 근거 {band_suffix}".strip()
-                    title_secondary = "##### ✅ 정상 가능성을 지지하는 근거"
-                    list_primary, list_secondary = negatives, positives
+            # 그래도 비면(학습통계가 없거나 입력 누락) 최소 1문장 보장
+            if not negatives:
+                if p_pd >= pd_cut:
+                    negatives = [f"PD 확률이 cut-off({pd_cut:.2f})를 넘었습니다(PD={p_pd*100:.1f}%). 일부 지표가 PD 학습군과 유사할 수 있어 추가 평가/추적을 권장합니다."]
                 else:
-                    title_primary = f"##### ✅ 정상 가능성을 지지하는 근거 {band_suffix}".strip()
-                    title_secondary = "##### ⚠️ 파킨슨 가능성을 시사하는 근거"
-                    list_primary, list_secondary = positives, negatives
+                    negatives = [f"PD 확률은 낮지만(PD={p_pd*100:.1f}%), 일부 지표가 PD 학습군과 유사할 수 있어 추적 관찰을 권장합니다."]
+            # 타이틀 톤: 더 높은 쪽(주결론) 먼저 보여주기
+            primary_is_pd = bool(p_pd >= pd_cut)
 
-                st.markdown(title_primary)
-                for t in (list_primary or []):
-                    st.write(f"- {t}")
+            band_suffix = {
+                "normal_very_high": "(매우 높음)",
+                "normal_high": "(높음)",
+                "border_mixed": "(경계)",
+                "border_cutoff": "(컷오프 근처)",
+                "pd_possible": "(가능성)",
+                "pd_high": "(높음)",
+                "pd_very_high": "(매우 높음)",
+            }.get(band_code, "")
 
-                st.markdown(title_secondary)
-                for t in (list_secondary or []):
-                    st.write(f"- {t}")
+            if primary_is_pd:
+                title_primary = f"##### 🔴 파킨슨 가능성을 시사하는 근거 {band_suffix}".strip()
+                title_secondary = "##### ✅ 정상 가능성을 지지하는 근거"
+                list_primary, list_secondary = negatives, positives
+            else:
+                title_primary = f"##### ✅ 정상 가능성을 지지하는 근거 {band_suffix}".strip()
+                title_secondary = "##### ⚠️ 파킨슨 가능성을 시사하는 근거"
+                list_primary, list_secondary = positives, negatives
+
+            st.markdown(title_primary)
+            for t in (list_primary or []):
+                st.write(f"- {t}")
+
+            st.markdown(title_secondary)
+            for t in (list_secondary or []):
+                st.write(f"- {t}")
 
             # 저장/전송용 데이터 패키징
             st.session_state.save_ready_data = {
