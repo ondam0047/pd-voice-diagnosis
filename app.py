@@ -229,6 +229,8 @@ def _safe_float(x, default=None):
 
 
 # --- 페이지 기본 설정 ---
+
+APP_VERSION = "v28_3_1_full_fixed"
 st.set_page_config(page_title="파킨슨병 환자 하위유형 분류 프로그램", layout="wide")
 
 
@@ -466,7 +468,7 @@ def sex_to_num(x):
     """성별을 숫자 feature로 변환: 남/M=1.0, 여/F=0.0, 그 외/결측=0.5"""
     if x is None:
         return 0.5
-    s = str(x).strip().lower()
+    s = str(x).strip().lower()()
     if s in ["m", "male", "man", "남", "남성", "남자", "1"]:
         return 1.0
     if s in ["f", "female", "woman", "여", "여성", "여자", "0"]:
@@ -846,7 +848,7 @@ setup_korean_font()
 # ==========================================
 
 @st.cache_resource
-def train_models():
+def train_models(cache_buster: str = "v28_3_1"):
     """training_data로 Step1/Step2 모델을 학습합니다."""
     global MODEL_LOAD_ERROR
 
@@ -977,7 +979,7 @@ def train_models():
 
 
 try:
-    model_step1, model_step2 = train_models()
+    model_step1, model_step2 = train_models("v28_3_1")
 except Exception as e:
     MODEL_LOAD_ERROR = f"모델 학습 중 예외: {type(e).__name__}: {e}"
     model_step1, model_step2 = None, None
