@@ -1476,7 +1476,14 @@ if st.session_state.get('is_analyzed'):
 
             # --- 최종 안전장치: 이유 리스트 공란 방지 (try 밖에서 무조건 실행) ---
             if not positives:
-                positives = (neg_auto[:3] if ("neg_auto" in locals() and neg_auto) else ["정상 확률이 더 높은 것으로 추정되었습니다. (경계 구간이라면 재측정/추가 평가를 권장합니다.)"])
+                if p_pd < pd_cut:
+                    positives = (neg_auto[:3] if ("neg_auto" in locals() and neg_auto) else [
+                        "정상 범위일 가능성이 더 높습니다. (경계 구간이라면 재측정/추가 평가를 권장합니다.)"
+                    ])
+                else:
+                    positives = (neg_auto[:3] if ("neg_auto" in locals() and neg_auto) else [
+                        "정상 가능성을 지지하는 근거는 제한적입니다(현재 입력에서는 PD 관련 신호가 더 우세합니다)."
+                    ])
             # negatives(=PD 가능성 근거)는 학습데이터 기반/규칙 기반 근거를 합친 뒤에도 비어있을 수 있어,
             # 여기서는 미리 채우지 않고 아래에서 '공란 방지' 로직으로 안전하게 보강합니다.
             # --- Step1 해석 타이틀/순서(확률 구간에 따라) + 설명 공란 방지 ---
