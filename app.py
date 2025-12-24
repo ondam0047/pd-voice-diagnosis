@@ -212,7 +212,7 @@ st.set_page_config(page_title="파킨슨병 환자 하위유형 분류 프로그
 # [설명(이유) 자동 생성: 상위 기여 변수 TOP-K]
 # - 규칙 기반 설명이 비어있을 때, 모델의 선형 기여도(표준화된 값 × 계수)를 이용해
 #   '왜 그렇게 나왔는지'를 최소 3개 항목으로 출력합니다.
-# - 서비스 안정성 목적: 과도한 단정 대신 '학습 데이터 기준으로' 표현합니다.
+# - 서비스 안정성 목적: 과도한 단정 대신 '모델 기준으로' 표현합니다.
 # ==========================================
 
 FEAT_LABELS_STEP1 = {
@@ -291,9 +291,9 @@ def top_contrib_linear_binary(pipeline, x_row, feat_names, pos_label="Parkinson"
         label = FEAT_LABELS_STEP1.get(name, FEAT_LABELS_STEP2.get(name, name))
         val = float(np.asarray(x_row, dtype=float)[i]) if np.isfinite(np.asarray(x_row, dtype=float)[i]) else None
         if contrib[i] >= 0 and len(pos) < topk:
-            pos.append(f"{label}이(가) 학습 기준에서 PD 쪽으로 작용했습니다" + (f" (입력: {val:.2f})" if val is not None else ""))
+            pos.append(f"{label}이(가) 모델에서 PD 확률을 높이는 방향으로 기여했습니다" + (f" (입력: {val:.2f})" if val is not None else ""))
         elif contrib[i] < 0 and len(neg) < topk:
-            neg.append(f"{label}이(가) 학습 기준에서 정상 쪽으로 작용했습니다" + (f" (입력: {val:.2f})" if val is not None else ""))
+            neg.append(f"{label}이(가) 모델에서 정상 확률을 높이는 방향으로 기여했습니다" + (f" (입력: {val:.2f})" if val is not None else ""))
         if len(pos) >= topk and len(neg) >= topk:
             break
     return pos, neg
@@ -998,7 +998,7 @@ def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e):
     if sps < 4.5: positives.append(f"말속도가 {sps:.2f} SPS로 측정되었습니다. 파킨슨병에서 흔히 나타나는 급격한 가속 현상(Festination) 없이 안정적인 속도를 유지하고 있습니다.")
     if db >= 60: positives.append(f"평균 음성 강도가 {db:.1f} dB로, 일반적인 대화 수준(60dB 이상)의 성량을 튼튼하게 유지하고 있습니다.")
 
-    if db < 60: negatives.append(f"평균 음성 강도가 {db:.1f} dB로 낮게 측정되었습니다(※ 마이크/거리/환경에 따라 절대값은 달라질 수 있으며, 본 도구의 학습 데이터 기준으로 낮은 편입니다). 이는 파킨슨병에서 흔한 강도 감소(Hypophonia) 패턴과 유사하여 발성 훈련이 필요할 수 있습니다.")
+    if db < 60: negatives.append(f"평균 음성 강도가 {db:.1f} dB로 낮게 측정되었습니다(※ 마이크/거리/환경에 따라 절대값은 달라질 수 있으며, 본 도구의 모델 기준으로 낮은 편입니다). 이는 파킨슨병에서 흔한 강도 감소(Hypophonia) 패턴과 유사하여 발성 훈련이 필요할 수 있습니다.")
     if sps >= 4.5: negatives.append(f"말속도가 {sps:.2f} SPS로 지나치게 빠릅니다. 이는 발화 제어가 어려워 말이 빠르지는 가속 징후(Short rushes of speech)일 가능성이 있습니다.")
     if artic < 70: negatives.append(f"청지각적 조음 정확도가 {artic}점으로 다소 낮습니다. 발음이 불분명해지는 조음 장애(Dysarthria) 징후가 관찰됩니다.")
     if vhi >= 20: negatives.append(f"VHI 총점이 {vhi}점으로 높습니다. 환자 스스로 음성 문제로 인한 생활의 불편함과 심리적 위축을 크게 느끼고 있습니다.")
@@ -1077,7 +1077,14 @@ if st.session_state.get('is_analyzed'):
         st.plotly_chart(st.session_state['fig_plotly'], use_container_width=True)
     
     with c2:
-        db_adj = st.slider("강도(dB) 보정", -50.0, 50.0, 0.0)
+        # 강도(dB) 보정: 기본값 -5 dB(권장). 필요 시 임상가가 조정할 수 있도록 슬라이더는 유지합니다.
+        INTENSITY_CORR_DB_DEFAULT = -5.0
+        lock_db = st.checkbox("강도 보정 고정(-5 dB) 사용(권장)", value=True, key="lock_db_corr",
+                             help="서비스 기본값은 -5 dB 고정입니다. 임상적으로 필요할 때만 해제하여 조정하세요.")
+        db_adj = st.slider("강도(dB) 보정", -50.0, 50.0, INTENSITY_CORR_DB_DEFAULT, 0.5, disabled=lock_db,
+                           help="마이크/환경에 따라 dB가 달라질 수 있습니다. 기본은 -5 dB 고정(권장)이며, 해제 시 수동 조정 가능합니다.")
+        if lock_db:
+            db_adj = INTENSITY_CORR_DB_DEFAULT
         final_db = st.session_state['mean_db'] + db_adj
         
         range_adj = st.slider("음도범위(Hz) 보정", 0.0, 300.0, float(st.session_state['pitch_range']))
@@ -1455,7 +1462,7 @@ if st.session_state.get('is_analyzed'):
 
             # --- 최종 안전장치: 이유 리스트 공란 방지 (try 밖에서 무조건 실행) ---
             if not positives:
-                positives = ["입력값들이 학습 데이터 기준에서 정상 범위에 비교적 가깝게 나타났습니다."]
+                positives = (neg_auto[:3] if ("neg_auto" in locals() and neg_auto) else ["정상 확률이 더 높은 것으로 추정되었습니다. (경계 구간이라면 재측정/추가 평가를 권장합니다.)"])
             # negatives(=PD 가능성 근거)는 학습데이터 기반/규칙 기반 근거를 합친 뒤에도 비어있을 수 있어,
             # 여기서는 미리 채우지 않고 아래에서 '공란 방지' 로직으로 안전하게 보강합니다.
             # --- Step1 해석 타이틀/순서(확률 구간에 따라) + 설명 공란 방지 ---
@@ -1464,7 +1471,7 @@ if st.session_state.get('is_analyzed'):
             # 학습데이터 기반 '가까움' 설명(안전장치)
             training_path = get_training_file()
             train_mtime = None
-            if training_path and os.path.exists(training_path):
+            if False and training_path and os.path.exists(training_path):
                 try:
                     train_mtime = os.path.getmtime(training_path)
                 except Exception:
@@ -1494,16 +1501,12 @@ if st.session_state.get('is_analyzed'):
             if borderline:
                 border_note = f"PD 확률이 cut-off({pd_cut:.2f}) 근처의 **경계 구간**입니다(PD={p_pd*100:.1f}%). 아래 지표를 중심으로 추가 평가/재측정을 권장합니다."
                 # 경계인데도 negatives가 비어있으면(입력 누락/통계 없음) 한 줄은 보장
-                if not negatives:
-                    negatives = ["(입력값/학습데이터 통계가 충분하지 않아 특정 지표를 제시하기 어렵습니다. 동일 조건으로 재측정 후 비교하세요.)"]
-                negatives = [border_note] + [t for t in negatives if t != border_note]
-
-            # 그래도 비면(학습통계가 없거나 입력 누락) 최소 1문장 보장
             if not negatives:
-                if p_pd >= pd_cut:
-                    negatives = [f"PD 확률이 cut-off({pd_cut:.2f})를 넘었습니다(PD={p_pd*100:.1f}%). 일부 지표가 PD 학습군과 유사할 수 있어 추가 평가/추적을 권장합니다."]
+                # 기여도 기반 근거가 있으면 그걸 우선 표시(구체적 지표가 포함됨)
+                if ("pos_auto" in locals()) and pos_auto:
+                    negatives = pos_auto[:3]
                 else:
-                    negatives = [f"PD 확률은 낮지만(PD={p_pd*100:.1f}%), 일부 지표가 PD 학습군과 유사할 수 있어 추적 관찰을 권장합니다."]
+                    negatives = [f"PD 확률이 cut-off({pd_cut:.2f}) 근처입니다(PD={p_pd*100:.1f}%). 재측정/추가 평가로 확인이 필요합니다."]
             # 타이틀 톤: 더 높은 쪽(주결론) 먼저 보여주기
             primary_is_pd = bool(p_pd >= pd_cut)
 
