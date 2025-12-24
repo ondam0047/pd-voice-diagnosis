@@ -232,6 +232,65 @@ def _safe_float(x, default=None):
 st.set_page_config(page_title="파킨슨병 환자 하위유형 분류 프로그램", layout="wide")
 
 
+# --- 임상 보정: Step1 PD 확률을 청지각/VHI 정황으로 보정(오탐 완화) ---
+def _calibrate_pd_probability(p_raw,
+                             vhi_total=None,
+                             p_artic=None,
+                             p_rate=None,
+                             p_loud=None,
+                             intensity_db=None,
+                             sps=None):
+    """Post-hoc calibration for clinical stability.
+    Returns (p_calibrated, notes). Does NOT change the underlying model,
+    only adjusts odds based on strong normal/red-flag evidence."""
+    if p_raw is None:
+        return None, []
+    try:
+        p = float(p_raw)
+    except Exception:
+        return None, []
+    # keep away from 0/1 for odds
+    p = min(max(p, 1e-6), 1.0 - 1e-6)
+    odds = p / (1.0 - p)
+
+    notes = []
+
+    # --- normal evidence (downweight) ---
+    if vhi_total is not None and vhi_total <= 3:
+        odds *= 0.70
+        notes.append("VHI 낮음(보정↓)")
+    if p_artic is not None and p_artic >= 70:
+        odds *= 0.70
+        notes.append("조음 정확도 양호(보정↓)")
+    if p_loud is not None and p_loud >= 70:
+        odds *= 0.85
+        notes.append("청지각 강도 양호(보정↓)")
+    if intensity_db is not None and intensity_db >= 65:
+        odds *= 0.90
+        notes.append("음향 강도 양호(보정↓)")
+    if sps is not None and sps <= 5.8:
+        odds *= 0.95
+        notes.append("말속도 안정(보정↓)")
+
+    # --- red flags (upweight) ---
+    if vhi_total is not None and vhi_total >= 20:
+        odds *= 1.25
+        notes.append("VHI 높음(보정↑)")
+    if p_artic is not None and p_artic <= 40:
+        odds *= 1.35
+        notes.append("조음 저하(보정↑)")
+    if p_loud is not None and p_loud <= 40:
+        odds *= 1.20
+        notes.append("청지각 강도 저하(보정↑)")
+    if sps is not None and sps >= 5.8:
+        odds *= 1.15
+        notes.append("말속도 빠름(보정↑)")
+
+    p_adj = odds / (1.0 + odds)
+    p_adj = float(min(max(p_adj, 0.0), 1.0))
+    return p_adj, notes
+
+
 # ==========================================
 # [설명(이유) 자동 생성: 상위 기여 변수 TOP-K]
 # - 규칙 기반 설명이 비어있을 때, 모델의 선형 기여도(표준화된 값 × 계수)를 이용해
@@ -1379,6 +1438,41 @@ if st.session_state.get('is_analyzed'):
                         prob_normal = (1.0 - p_pd) * 100.0
                 except Exception:
                     pass
+                # --- Step1 임상 보정(오탐 완화): 청지각/VHI 등 강한 정상 정황이면 PD odds를 낮춰 해석 안정화 ---
+                try:
+                    p_pd_raw = float(p_pd)
+                except Exception:
+                    p_pd_raw = None
+
+                vhi_total = _safe_float(st.session_state.get("vhi_total"), default=None)
+                p_artic = _safe_float(st.session_state.get("p_artic"), default=None)
+                p_rate  = _safe_float(st.session_state.get("p_rate"), default=None)
+                p_loud  = _safe_float(st.session_state.get("p_loud"), default=None)
+
+                p_pd_cal, cal_notes = _calibrate_pd_probability(
+                    p_pd_raw,
+                    vhi_total=vhi_total,
+                    p_artic=p_artic,
+                    p_rate=p_rate,
+                    p_loud=p_loud,
+                    intensity_db=db_in,
+                    sps=sps_in,
+                )
+
+                # 보정값이 계산되면 판정/밴드는 보정 확률로, 원확률은 참고로 저장/표시
+                if p_pd_cal is not None:
+                    st.session_state["step1_p_pd_raw"] = p_pd_raw
+                    st.session_state["step1_p_pd_cal"] = p_pd_cal
+                    st.session_state["step1_cal_notes"] = cal_notes
+                    p_pd = float(p_pd_cal)
+                    p_norm = 1.0 - p_pd
+                    prob_normal = p_norm * 100.0
+                else:
+                    st.session_state["step1_p_pd_raw"] = p_pd_raw
+                    st.session_state["step1_p_pd_cal"] = None
+                    st.session_state["step1_cal_notes"] = []
+
+
                 # cut-off 기준으로 판정
                 if p_pd >= pd_cut:
                     kind, headline, band_code = step1_screening_band(p_pd, pd_cut)
@@ -1388,6 +1482,18 @@ if st.session_state.get('is_analyzed'):
                         st.warning(f"🟡 **{headline}**  | Normal={prob_normal:.1f}%  PD={p_pd*100:.1f}% (cut-off={pd_cut:.2f})")
                     else:
                         st.success(f"🟢 **{headline}**  | Normal={prob_normal:.1f}%  PD={p_pd*100:.1f}% (cut-off={pd_cut:.2f})")
+                    # (참고) 모델 원확률 vs 임상 보정 확률 표시
+                    try:
+                        p_raw_show = st.session_state.get("step1_p_pd_raw", None)
+                        p_cal_show = st.session_state.get("step1_p_pd_cal", None)
+                        notes_show = st.session_state.get("step1_cal_notes", [])
+                        if p_raw_show is not None and p_cal_show is not None and abs(float(p_raw_show) - float(p_cal_show)) > 1e-6:
+                            note_txt = ", ".join(list(notes_show)[:4]) if notes_show else ""
+                            st.caption(f"모델 원확률: PD={float(p_raw_show)*100:.1f}% → 임상 보정 후: PD={float(p_cal_show)*100:.1f}% {(' | ' + note_txt) if note_txt else ''}")
+                    except Exception:
+                        pass
+
+
                     st.session_state.step1_band_code = band_code
                     if model_step2:
                         # Step2 입력(feature 축소 버전) — FEATS_STEP2에 맞춰 값만 구성
