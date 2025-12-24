@@ -36,6 +36,140 @@ from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import StandardScaler
 from sklearn.pipeline import Pipeline
 
+# -------------------------------
+# Step1 screening 메시지(확률 구간별)
+# -------------------------------
+def step1_screening_band(p_pd: float, pd_cut: float = 0.50):
+    """
+    Step1(정상 vs PD) 스크리닝 확률(p_pd)에 따라 안내 문구/톤을 조절합니다.
+    Return: (kind, headline, band_code)
+      - kind: 'success'|'warning'|'error' (Streamlit 배너 색상)
+      - headline: 사용자 안내 문구(스크리닝/추정 표현)
+      - band_code: 후속 해석(섹션 제목/경계 안내)에 사용할 내부 코드
+    """
+    try:
+        p_pd = float(p_pd)
+    except Exception:
+        p_pd = 0.0
+
+    # 확률 구간(서비스/임상용 추천)
+    if p_pd <= 0.10:
+        return ("success", "정상 범위로 판단됩니다(정상 가능성이 매우 높음).", "normal_very_high")
+    if p_pd < 0.30:
+        return ("success", "정상 범위일 가능성이 높습니다.", "normal_high")
+    if p_pd < 0.45:
+        return ("warning", "경계 구간입니다(정상/파킨슨 가능성이 혼재).", "border_mixed")
+    if p_pd < 0.55:
+        return ("warning", f"컷오프({pd_cut:.2f}) 근처의 경계 구간입니다(추가 평가/재측정 권장).", "border_cutoff")
+    if p_pd < 0.70:
+        return ("warning", "파킨슨병 관련 음성 특징이 관찰될 가능성이 있습니다.", "pd_possible")
+    if p_pd < 0.90:
+        return ("error", "파킨슨병 관련 음성 특징이 뚜렷할 가능성이 높습니다.", "pd_high")
+    return ("error", "파킨슨병 관련 음성 특징이 매우 강하게 관찰됩니다.", "pd_very_high")
+
+
+
+@st.cache_data
+def get_step1_training_stats(_file_mtime=None):
+    """
+    Step1(정상 vs PD) 해석 보강용 통계(학습데이터 기준).
+    - 중앙값(robust) 기반으로 입력값이 어느 집단에 더 가까운지 설명하기 위해 사용
+    - 서비스 안정성: 모델/파이프라인 내부에서 계수 추출이 실패해도 설명이 '공란'이 되지 않도록 하는 안전장치
+    """
+    training_path = get_training_file()
+    if training_path is None:
+        return None
+
+    try:
+        df = pd.read_csv(training_path) if training_path.lower().endswith(".csv") else pd.read_excel(training_path)
+    except Exception:
+        return None
+
+    label_col = "진단결과 (Label)"
+    if label_col not in df.columns:
+        return None
+
+    labels = df[label_col].astype(str).str.lower()
+    is_pd = labels.str.startswith("pd_")
+    is_normal = labels.eq("normal")
+
+    feats = ["F0", "Range", "강도(dB)", "SPS"]
+    stats = {}
+    for f in feats:
+        if f not in df.columns:
+            continue
+        pd_vals = pd.to_numeric(df.loc[is_pd, f], errors="coerce").dropna()
+        n_vals = pd.to_numeric(df.loc[is_normal, f], errors="coerce").dropna()
+        if len(pd_vals) < 2 or len(n_vals) < 2:
+            continue
+        stats[f] = {
+            "pd_med": float(pd_vals.median()),
+            "n_med": float(n_vals.median()),
+            "pd_mean": float(pd_vals.mean()),
+            "n_mean": float(n_vals.mean()),
+        }
+    return stats if stats else None
+
+
+def explain_step1_by_training(stats, x_dict, topk=3):
+    """
+    학습데이터(중앙값) 기준으로 입력값이 PD/정상 중 어디에 더 가까운지 설명 문장 생성.
+    Return: (reasons_normal, reasons_pd)
+    """
+    if not stats:
+        return [], []
+
+    reasons_pd, reasons_n = [], []
+    scored = []
+
+    for f, s in stats.items():
+        if f not in x_dict:
+            continue
+        try:
+            x = float(x_dict[f])
+        except Exception:
+            continue
+
+        pd_med = s.get("pd_med")
+        n_med = s.get("n_med")
+        if pd_med is None or n_med is None:
+            continue
+
+        d_pd = abs(x - pd_med)
+        d_n = abs(x - n_med)
+        denom = abs(n_med - pd_med) + 1e-6
+        strength = float((d_n - d_pd) / denom)  # +면 PD쪽, -면 정상쪽
+        scored.append((abs(strength), strength, f, x, pd_med, n_med))
+
+    scored.sort(reverse=True, key=lambda t: t[0])
+
+    for _, strength, f, x, pd_med, n_med in scored:
+        if f == "강도(dB)":
+            name, unit, fmt = "평균 음성 강도", "dB", f"{x:.1f}dB"
+            pd_fmt, n_fmt = f"{pd_med:.1f}dB", f"{n_med:.1f}dB"
+        elif f == "Range":
+            name, unit, fmt = "음도 범위", "Hz", f"{x:.1f}Hz"
+            pd_fmt, n_fmt = f"{pd_med:.1f}Hz", f"{n_med:.1f}Hz"
+        elif f == "F0":
+            name, unit, fmt = "평균 음도(F0)", "Hz", f"{x:.1f}Hz"
+            pd_fmt, n_fmt = f"{pd_med:.1f}Hz", f"{n_med:.1f}Hz"
+        elif f == "SPS":
+            name, unit, fmt = "말속도(SPS)", "", f"{x:.2f}"
+            pd_fmt, n_fmt = f"{pd_med:.2f}", f"{n_med:.2f}"
+        else:
+            name, fmt = f, f"{x:.3f}"
+            pd_fmt, n_fmt = f"{pd_med:.3f}", f"{n_med:.3f}"
+
+        if strength > 0 and len(reasons_pd) < topk:
+            reasons_pd.append(f"{name}가 {fmt}로 **정상 중앙값({n_fmt})보다 PD 중앙값({pd_fmt})에 더 가깝습니다**.")
+        elif strength < 0 and len(reasons_n) < topk:
+            reasons_n.append(f"{name}가 {fmt}로 **PD 중앙값({pd_fmt})보다 정상 중앙값({n_fmt})에 더 가깝습니다**.")
+
+        if len(reasons_pd) >= topk and len(reasons_n) >= topk:
+            break
+
+    return reasons_n[:topk], reasons_pd[:topk]
+
 
 # --- 페이지 기본 설정 ---
 st.set_page_config(page_title="파킨슨병 환자 하위유형 분류 프로그램", layout="wide")
@@ -1022,7 +1156,14 @@ if st.session_state.get('is_analyzed'):
 
                 # cut-off 기준으로 판정
                 if p_pd >= pd_cut:
-                    st.error(f"🔴 **파킨슨 가능성 (PD) ({p_pd*100:.1f}%)**  | cut-off={pd_cut:.2f}")
+                    kind, headline, band_code = step1_screening_band(p_pd, pd_cut)
+                    if kind == "error":
+                        st.error(f"🔴 **{headline}**  | Normal={prob_normal:.1f}%  PD={p_pd*100:.1f}% (cut-off={pd_cut:.2f})")
+                    elif kind == "warning":
+                        st.warning(f"🟡 **{headline}**  | Normal={prob_normal:.1f}%  PD={p_pd*100:.1f}% (cut-off={pd_cut:.2f})")
+                    else:
+                        st.success(f"🟢 **{headline}**  | Normal={prob_normal:.1f}%  PD={p_pd*100:.1f}% (cut-off={pd_cut:.2f})")
+                    st.session_state.step1_band_code = band_code
                     if model_step2:
                         # Step2 입력(feature 축소 버전) — FEATS_STEP2에 맞춰 값만 구성
                         feat_map2 = {
@@ -1153,14 +1294,22 @@ if st.session_state.get('is_analyzed'):
                         pass
 
                     if red_flags:
+                        kind, headline, band_code = step1_screening_band(p_pd, pd_cut)
+                        # 정상으로 분류되었지만 red-flag가 있을 때는 경고로 고정
                         st.warning(
-                            f"🟡 **정상으로 분류되었지만(확률 기반), 일부 지표에서 이상 소견이 관찰됩니다. 추가 평가/추적검사를 권장합니다.**  | "
-                            f"Normal={prob_normal:.1f}%  PD={p_pd*100:.1f}% (cut-off={pd_cut:.2f})"
+                            f"🟡 **정상(주의): {headline}**  | Normal={prob_normal:.1f}%  PD={p_pd*100:.1f}% (cut-off={pd_cut:.2f})"
                         )
                         st.write("관찰된 항목: " + ", ".join(red_flags))
                         final_decision = "Normal (주의)"
                     else:
-                        st.success(f"🟢 **정상 음성 (Normal) ({prob_normal:.1f}%)**  | PD={p_pd*100:.1f}% , cut-off={pd_cut:.2f}")
+                        kind, headline, band_code = step1_screening_band(p_pd, pd_cut)
+                        # red-flag가 없으면 구간별 메시지 그대로 사용
+                        if kind == "warning":
+                            st.warning(f"🟡 **{headline}**  | Normal={prob_normal:.1f}%  PD={p_pd*100:.1f}% (cut-off={pd_cut:.2f})")
+                        elif kind == "error":
+                            st.error(f"🔴 **{headline}**  | Normal={prob_normal:.1f}%  PD={p_pd*100:.1f}% (cut-off={pd_cut:.2f})")
+                        else:
+                            st.success(f"🟢 **{headline}**  | Normal={prob_normal:.1f}%  PD={p_pd*100:.1f}% (cut-off={pd_cut:.2f})")
                         final_decision = "Normal"
             # --- (임상용) 정상(주의)에서도 PD 하위집단 추정 결과 표시(참고) ---
             # Step2 모델은 파킨슨 환자 데이터로 학습되어 '정상'에서의 해석에는 제한이 있습니다.
@@ -1271,13 +1420,72 @@ if st.session_state.get('is_analyzed'):
                 else:
                     negatives = [f"모델이 일부 지표를 PD 학습군과 유사하게 해석했습니다(PD={p_pd*100:.1f}%). 추가 평가/추적을 권장합니다."]
 
-            st.markdown("##### ✅ 정상일 확률이 높게 나온 이유")
-            for p in positives: 
-                st.write(f"- {p}")
-            st.markdown("##### ⚠️ 파킨슨 가능성이 존재하는 이유")
-            for n in negatives: 
-                st.write(f"- {n}")
+                            # --- Step1 해석 타이틀/순서(확률 구간에 따라) + 설명 공란 방지 ---
+                band_code = st.session_state.get("step1_band_code", None)
 
+                # 학습데이터 기반 '가까움' 설명(안전장치)
+                training_path = get_training_file()
+                train_mtime = None
+                if training_path and os.path.exists(training_path):
+                    try:
+                        train_mtime = os.path.getmtime(training_path)
+                    except Exception:
+                        train_mtime = None
+
+                stats_step1 = get_step1_training_stats(_file_mtime=train_mtime)
+                x_dict = {
+                    "F0": st.session_state.get("f0_mean", np.nan),
+                    "Range": range_adj,
+                    "강도(dB)": final_db,
+                    "SPS": final_sps,
+                }
+                n_like, pd_like = explain_step1_by_training(stats_step1, x_dict, topk=3)
+
+                # 자동 설명이 비어있거나, 컷오프 근처이면(=임상적으로 애매) 학습데이터 기반 설명을 보강
+                if (not positives) and n_like:
+                    positives = list(dict.fromkeys((positives or []) + n_like))
+                if ((not negatives) or (abs(p_pd - pd_cut) <= 0.10)) and pd_like:
+                    negatives = list(dict.fromkeys((negatives or []) + pd_like))
+
+                # 그래도 비면(학습통계도 없거나 입력 누락) 최소 1문장 보장
+                if not negatives:
+                    negatives = [f"PD 확률이 cut-off({pd_cut:.2f}) 근처이거나 낮습니다(PD={p_pd*100:.1f}%). 다만 일부 지표는 PD 학습군과 유사할 수 있어 추가 평가/추적을 권장합니다."]
+
+                # 컷오프 근처이면 첫 줄을 경계 안내로 고정(원인+권고)
+                if abs(p_pd - pd_cut) <= 0.10:
+                    border_note = f"PD 확률이 cut-off({pd_cut:.2f}) 근처입니다(PD={p_pd*100:.1f}%). 아래 지표들이 PD 학습군과 더 유사했습니다."
+                    if border_note not in negatives:
+                        negatives = [border_note] + negatives
+
+                # 타이틀 톤: 더 높은 쪽(주결론) 먼저 보여주기
+                primary_is_pd = bool(p_pd >= pd_cut)
+
+                band_suffix = {
+                    "normal_very_high": "(매우 높음)",
+                    "normal_high": "(높음)",
+                    "border_mixed": "(경계)",
+                    "border_cutoff": "(컷오프 근처)",
+                    "pd_possible": "(가능성)",
+                    "pd_high": "(높음)",
+                    "pd_very_high": "(매우 높음)",
+                }.get(band_code, "")
+
+                if primary_is_pd:
+                    title_primary = f"##### 🔴 파킨슨 가능성을 시사하는 근거 {band_suffix}".strip()
+                    title_secondary = "##### ✅ 정상 가능성을 지지하는 근거"
+                    list_primary, list_secondary = negatives, positives
+                else:
+                    title_primary = f"##### ✅ 정상 가능성을 지지하는 근거 {band_suffix}".strip()
+                    title_secondary = "##### ⚠️ 파킨슨 가능성을 시사하는 근거"
+                    list_primary, list_secondary = positives, negatives
+
+                st.markdown(title_primary)
+                for t in (list_primary or []):
+                    st.write(f"- {t}")
+
+                st.markdown(title_secondary)
+                for t in (list_secondary or []):
+                    st.write(f"- {t}")
 
             # 저장/전송용 데이터 패키징
             st.session_state.save_ready_data = {
