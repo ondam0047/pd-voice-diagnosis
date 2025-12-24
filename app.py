@@ -1119,6 +1119,8 @@ if st.session_state.get('is_analyzed'):
                 help="고정 모드에서는 -5 dB가 적용됩니다."
             )
             db_adj = INTENSITY_CORR_DB_LOCK_VALUE
+            # lock 모드에서는 다음 실행에서도 동일한 값이 기본으로 유지되도록 저장
+            st.session_state["db_adj"] = db_adj
         else:
             db_adj = st.slider(
                 "강도(dB) 보정",
@@ -1128,7 +1130,6 @@ if st.session_state.get('is_analyzed'):
                 key="db_adj",
                 help="마이크/환경에 따라 dB가 달라질 수 있습니다. 기본은 0 dB(측정값 그대로)이며 필요 시 수동 조정 가능합니다."
             )
-            st.session_state["db_adj"] = db_adj
 
         final_db = st.session_state['mean_db'] + db_adj
         range_adj = st.slider("음도범위(Hz) 보정", 0.0, 300.0, float(st.session_state['pitch_range']))
