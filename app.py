@@ -57,8 +57,14 @@ def step1_screening_band(p_pd: float, pd_cut: float = 0.50):
         return ("success", "정상 범위로 판단됩니다(정상 가능성이 매우 높음).", "normal_very_high")
     if p_pd < 0.30:
         return ("success", "정상 범위일 가능성이 높습니다.", "normal_high")
+
+    # 0.30~0.40: 정상 쪽이 우세한 경계(혼재)로 보되, 과도한 경고를 피하기 위해 '정상 우세'로 안내
+    if p_pd < 0.40:
+        return ("success", "정상 가능성이 더 높습니다(일부 지표가 PD 학습군과 겹칠 수 있어 경계로 분류).", "border_mixed_normal_lean")
+
+    # 0.40~0.45: 컷오프에 가까운 정상-우세 경계 구간(재측정/추적 권장)
     if p_pd < 0.45:
-        return ("warning", "경계 구간입니다(정상/파킨슨 가능성이 혼재).", "border_mixed")
+        return ("warning", "정상 가능성이 더 높지만 일부 지표가 PD 학습군과 겹칠 수 있습니다(경계).", "border_mixed_normal_lean2")
     if p_pd < 0.55:
         return ("warning", f"컷오프({pd_cut:.2f}) 근처의 경계 구간입니다(추가 평가/재측정 권장).", "border_cutoff")
     if p_pd < 0.70:
@@ -1545,6 +1551,8 @@ if st.session_state.get('is_analyzed'):
                 "normal_very_high": "(매우 높음)",
                 "normal_high": "(높음)",
                 "border_mixed": "(경계)",
+                "border_mixed_normal_lean": "(경계, 정상 우세)",
+                "border_mixed_normal_lean2": "(경계, 정상 우세)",
                 "border_cutoff": "(컷오프 근처)",
                 "pd_possible": "(가능성)",
                 "pd_high": "(높음)",
