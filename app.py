@@ -499,17 +499,17 @@ def compute_cutoffs_from_training(_file_mtime=None):
 
     # ---------- Step1: Normal vs PD cut-off (LOO OOF) ----------
     
-# Step1 보강: Range(Hz)는 평균F0/성별의 영향을 크게 받습니다.
-# 학습/추정 모두에서 Range/F0 정규화(RangeNorm)를 사용해 성별 편향 및 F0 스케일 문제를 완화합니다.
-if 'RangeNorm' not in df.columns:
-    try:
-        _f0 = pd.to_numeric(df.get('F0'), errors='coerce')
-        _rng = pd.to_numeric(df.get('Range'), errors='coerce')
-        df['RangeNorm'] = (_rng / _f0.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
-    except Exception:
-        df['RangeNorm'] = np.nan
+    # Step1 보강: Range(Hz)는 평균F0/성별의 영향을 크게 받습니다.
+    # 학습/추정 모두에서 Range/F0 정규화(RangeNorm)를 사용해 성별 편향 및 F0 스케일 문제를 완화합니다.
+    if 'RangeNorm' not in df.columns:
+        try:
+            _f0 = pd.to_numeric(df.get('F0'), errors='coerce')
+            _rng = pd.to_numeric(df.get('Range'), errors='coerce')
+            df['RangeNorm'] = (_rng / _f0.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
+        except Exception:
+            df['RangeNorm'] = np.nan
 
-X1 = df[FEATS_STEP1].copy()
+    X1 = df[FEATS_STEP1].copy()
     y1 = df["Diagnosis"].astype(str).values
 
     loo = LeaveOneOut()
