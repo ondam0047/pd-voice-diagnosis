@@ -348,6 +348,9 @@ FEATS_STEP1 = ['F0', 'Range', 'Intensity', 'SPS', 'Sex']  # Step1 판정에는 V
 # Step2는 PD 하위집단 표본이 작아(특히 말속도 집단) 고차원 특성에 불안정합니다.
 # 임상적으로 구분력이 큰 핵심 변수(강도/말속도/조음)만 사용합니다.
 FEATS_STEP2 = ['Intensity', 'SPS', 'P_Loudness', 'P_Rate', 'P_Artic']
+
+# Step2 하위집단: Top1–Top2 차이가 작으면(혼합 패턴) 혼합형으로 표시 (임상용)
+MIX_MARGIN_P = 0.10  # 10%p
 def sex_to_num(x):
     """성별을 숫자 feature로 변환: 남/M=1.0, 여/F=0.0, 그 외/결측=0.5"""
     if x is None:
@@ -1220,46 +1223,40 @@ if st.session_state.get('is_analyzed'):
                         j = int(np.argmax(probs_sub))
                         pred_sub = sub_classes[j]
                         pred_prob = float(probs_sub[j])
-                        final_decision = pred_sub
+                        final_decision = pred_sub  # (안정성) 모델 예측 라벨은 기본적으로 유지
 
-                        
-                                                # --- Hybrid rule (임상 안정성): '조음 저하 신호'를 보조적으로 반영 ---
-                        # 규칙 발동: 조음정확도(청지각) ≤ 40 이면서, 속도 신호가 높지 않음(청지각 말속도≤60, SPS≤4.6).
-                        # - 모델이 '강도 집단'을 우세하게 예측하면(또는 강도 확률이 조음보다 충분히 높으면) 결과를 뒤집지 않고 '조음 저하 동반 가능'만 안내합니다.
-                        # - 모델이 '말속도 집단' 등으로 예측했지만 조음 저하 신호가 강하고, 조음 집단 확률이 상위권이면 '조음 집단'으로 보정합니다.
-                        intensity_prob = None
-                        jo_prob = None
+                        # --- 혼합형(Top1–Top2 차이 < MIX_MARGIN_P) 표시용 요약 ---
                         try:
-                            intensity_prob = float(probs_sub[list(sub_classes).index("강도 집단")])
+                            _pairs = sorted(zip(sub_classes, probs_sub), key=lambda x: float(x[1]), reverse=True)
+                            _top1_lbl, _top1_p = _pairs[0][0], float(_pairs[0][1])
+                            _top2_lbl, _top2_p = (_pairs[1][0], float(_pairs[1][1])) if len(_pairs) > 1 else (None, 0.0)
+                            _is_mixed = (_top2_lbl is not None) and ((_top1_p - _top2_p) < MIX_MARGIN_P)
                         except Exception:
-                            intensity_prob = None
-                        try:
-                            jo_prob = float(probs_sub[list(sub_classes).index("조음 집단")])
-                        except Exception:
-                            jo_prob = None
+                            _top1_lbl, _top1_p, _top2_lbl, _top2_p, _is_mixed = pred_sub, float(pred_prob), None, 0.0, False
 
-                        rule_artic = (p_artic is not None and p_rate is not None and final_sps is not None and
-                                      float(p_artic) <= 40 and float(p_rate) <= 60 and float(final_sps) <= 4.6)
+                        pred_sub_display = pred_sub
+                        if _is_mixed:
+                            pred_sub_display = f"혼합형({_top1_lbl} 우세, {_top2_lbl} 동반)"
 
-                        if rule_artic:
-                            margin = 0.05  # 5%p 차이면 '우세'로 간주
-                            # 1) 강도 집단이 우세하면: 결과 유지 + 조음 저하 동반 가능만 안내
-                            if pred_sub == "강도 집단" and intensity_prob is not None and jo_prob is not None and (intensity_prob - jo_prob) >= margin:
-                                st.info(f"🧩 조음 저하 신호(조음정확도≤40)가 관찰되지만, 모델은 **강도 집단**이 우세합니다(+{(intensity_prob-jo_prob)*100:.1f}%p). → **강도 집단 유지**, 조음 저하 동반 가능")
-                            elif pred_sub == "강도 집단" and intensity_prob is not None and intensity_prob >= 0.70:
-                                st.info(f"🛡️ 조음 저하 신호(≤40)가 있지만, 모델이 **강도 집단 {intensity_prob*100:.1f}%**로 강하게 예측하여 결과를 유지했습니다.")
-                            else:
-                                # 2) 강도 집단이 우세가 아니고, 조음 집단 확률이 상위권이면 조음 집단으로 보정
-                                #    (예: 말속도 집단으로 나왔는데 조음만 낮은 케이스)
-                                if jo_prob is not None and (jo_prob >= (pred_prob - margin)):
-                                    pred_sub = "조음 집단"
-                                    pred_prob = float(jo_prob)
-                                    final_decision = pred_sub
-                                    st.warning("🧩 하이브리드 규칙 적용: 조음 정확도 저하(≤40) + 속도 신호 높지 않음 → **조음 집단**으로 보정했습니다.")
-                                else:
-                                    st.info("🧩 조음 저하 신호(≤40)가 관찰되지만, 하위집단 확률 분포가 혼재되어 **모델 예측을 유지**합니다(혼합형 가능).")
+                        if _is_mixed and (_top2_lbl is not None):
+                            st.info(f"➡️ PD 하위 집단 추정: **{pred_sub_display}**  (Top1: {_top1_lbl} {_top1_p*100:.1f}%, Top2: {_top2_lbl} {_top2_p*100:.1f}%)")
+                        else:
+                            st.info(f"➡️ PD 하위 집단 예측: **{pred_sub}** ({pred_prob*100:.1f}%)")
 
-                        st.info(f"➡️ PD 하위 집단 예측: **{pred_sub}** ({pred_prob*100:.1f}%)")
+                        # --- Hybrid 신호(임상 안정성): 라벨 '보정'은 하지 않고, 동반 가능성만 안내 ---
+                        intensity_prob = float(probs_sub[list(sub_classes).index("강도 집단")]) if "강도 집단" in sub_classes else None
+                        jo_prob = float(probs_sub[list(sub_classes).index("조음 집단")]) if "조음 집단" in sub_classes else None
+                        rate_prob = float(probs_sub[list(sub_classes).index("말속도 집단")]) if "말속도 집단" in sub_classes else None
+
+                        rule_artic = (percep_artic_score is not None) and (percep_artic_score <= 40) and ((rate_prob is None) or (rate_prob < 0.45))
+                        if rule_artic and pred_sub == "강도 집단" and jo_prob is not None and jo_prob > 0:
+                            st.info("🧩 하이브리드 신호: 조음 정확도 저하(≤40) + 속도 신호 높지 않음 → 강도 우세이지만 **조음 동반 가능(혼합형)** 이 있습니다. (라벨 보정 없음)")
+                        elif rule_artic:
+                            st.info("🧩 하이브리드 신호: 조음 정확도 저하(≤40) + 속도 신호 높지 않음 → **조음 저하 동반 가능** 이 있습니다. (라벨 보정 없음)")
+                        elif pred_sub == "강도 집단" and jo_prob is not None and _top2_lbl == "조음 집단" and ((_top1_p - _top2_p) < MIX_MARGIN_P):
+                            st.info(f"🧩 혼합 패턴: 강도({_top1_p*100:.1f}%) 우세이나 조음({_top2_p*100:.1f}%)도 근접합니다 → **혼합형(강도 우세, 조음 동반)** 으로 해석하세요.")
+                        else:
+                            st.info("ℹ️ 임상 참고: PD 하위집단(강도/말속도/조음)은 **PD 데이터로만 학습**된 추정 결과입니다. 정상 케이스에서는 참고용으로만 해석하세요.")
 
                         # ---- Spider/Radar chart: PD 하위집단 확률 시각화 (원래 UI 복원) ----
                         try:
@@ -1389,34 +1386,38 @@ if st.session_state.get('is_analyzed'):
                     pred_prob_ref = float(probs_sub_ref[j_ref])
 
                     # Hybrid rule + intensity guard (참고용 추정에도 동일 적용)
-                    pred_sub_ref_final = pred_sub_ref
-                    intensity_prob_ref = None
+                    pred_sub_ref_final = pred_sub_ref  # 라벨 보정 없음(임상 안정성)
+
+                    # --- 혼합형(Top1–Top2 차이 < MIX_MARGIN_P) 표시용 요약(참고) ---
                     try:
-                        intensity_prob_ref = float(probs_sub_ref[list(sub_classes_ref).index("강도 집단")])
+                        _pairs_r = sorted(zip(sub_classes_ref, probs_sub_ref), key=lambda x: float(x[1]), reverse=True)
+                        _top1_lbl_r, _top1_p_r = _pairs_r[0][0], float(_pairs_r[0][1])
+                        _top2_lbl_r, _top2_p_r = (_pairs_r[1][0], float(_pairs_r[1][1])) if len(_pairs_r) > 1 else (None, 0.0)
+                        _is_mixed_r = (_top2_lbl_r is not None) and ((_top1_p_r - _top2_p_r) < MIX_MARGIN_P)
                     except Exception:
-                        intensity_prob_ref = None
+                        _top1_lbl_r, _top1_p_r, _top2_lbl_r, _top2_p_r, _is_mixed_r = pred_sub_ref, float(pred_prob_ref), None, 0.0, False
 
-                    try:
-                        cond_artic = (p_artic is not None) and (float(p_artic) <= 40)
-                        cond_rate = (p_rate is not None) and (float(p_rate) <= 60)
-                        cond_sps = (final_sps is not None) and (float(final_sps) <= 4.6)
-                        if cond_artic and cond_rate and cond_sps:
-                            # guard: if intensity probability is very high, do not override
-                            if intensity_prob_ref is not None and intensity_prob_ref >= 0.70:
-                                st.info(f"🛡️ (참고) 조음 우선 규칙 조건을 만족했지만, 모델이 **강도 집단 {intensity_prob_ref*100:.1f}%**로 강하게 예측(≥70%)하여 결과를 유지했습니다.")
-                            else:
-                                pred_sub_ref_final = "조음 집단"
-                                st.warning("🧩 (참고) 조음 우선 규칙 적용: 조음 정확도 저하(≤40) + 속도 신호 높지 않음 → **조음 집단**으로 표시했습니다.")
-                    except Exception:
-                        pass
+                    pred_sub_ref_display = pred_sub_ref
+                    if _is_mixed_r:
+                        pred_sub_ref_display = f"혼합형({_top1_lbl_r} 우세, {_top2_lbl_r} 동반)"
 
-                    st.markdown(f"**PD 하위집단 추정(참고): {pred_sub_ref_final}** ({pred_prob_ref*100:.1f}%)")
+                    if _is_mixed_r and (_top2_lbl_r is not None):
+                        st.info(f"➡️ PD 하위 집단 예측(참고): **{pred_sub_ref_display}**  (Top1: {_top1_lbl_r} {_top1_p_r*100:.1f}%, Top2: {_top2_lbl_r} {_top2_p_r*100:.1f}%)")
+                    else:
+                        st.info(f"➡️ PD 하위 집단 예측(참고): **{pred_sub_ref_final}** ({pred_prob_ref*100:.1f}%)")
 
-                    # 확률 표
-                    dfp_ref = pd.DataFrame({"진단": sub_classes_ref, "확률(%)": [round(p*100, 1) for p in probs_sub_ref]})
-                    with st.expander("📊 하위집단 확률(상세) (참고)", expanded=False):
-                        st.dataframe(dfp_ref, use_container_width=True)
+                    # --- Hybrid 신호(참고): 라벨 보정은 하지 않고, 동반 가능성만 안내 ---
+                    intensity_prob_ref = float(probs_sub_ref[list(sub_classes_ref).index("강도 집단")]) if "강도 집단" in sub_classes_ref else None
+                    jo_prob_ref = float(probs_sub_ref[list(sub_classes_ref).index("조음 집단")]) if "조음 집단" in sub_classes_ref else None
+                    rate_prob_ref = float(probs_sub_ref[list(sub_classes_ref).index("말속도 집단")]) if "말속도 집단" in sub_classes_ref else None
 
+                    rule_artic_ref = (percep_artic_score_ref is not None) and (percep_artic_score_ref <= 40) and ((rate_prob_ref is None) or (rate_prob_ref < 0.45))
+                    if rule_artic_ref and pred_sub_ref == "강도 집단" and jo_prob_ref is not None and jo_prob_ref > 0:
+                        st.info("🧩 하이브리드 신호(참고): 조음 정확도 저하(≤40) + 속도 신호 높지 않음 → 강도 우세이지만 **조음 동반 가능(혼합형)** 이 있습니다. (라벨 보정 없음)")
+                    elif rule_artic_ref:
+                        st.info("🧩 하이브리드 신호(참고): 조음 정확도 저하(≤40) + 속도 신호 높지 않음 → **조음 저하 동반 가능** 이 있습니다. (라벨 보정 없음)")
+                    elif pred_sub_ref == "강도 집단" and jo_prob_ref is not None and _top2_lbl_r == "조음 집단" and ((_top1_p_r - _top2_p_r) < MIX_MARGIN_P):
+                        st.info(f"🧩 혼합 패턴(참고): 강도({_top1_p_r*100:.1f}%) 우세이나 조음({_top2_p_r*100:.1f}%)도 근접합니다 → **혼합형(강도 우세, 조음 동반)** 으로 해석하세요.")
                     # Radar chart
                     try:
                         labels = sub_classes_ref
