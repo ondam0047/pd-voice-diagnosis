@@ -499,6 +499,16 @@ def compute_cutoffs_from_training(_file_mtime=None):
             vhi_e = (raw_e / 40.0) * 8.0
             vhi_total = vhi_f + vhi_p + vhi_e
 
+        # (안정성) Step1 가드에서 사용할 수 있도록 VHI 합계를 session_state에 저장
+        try:
+            st.session_state["vhi_total"] = float(vhi_total)
+            st.session_state["vhi_f"] = float(vhi_f)
+            st.session_state["vhi_p"] = float(vhi_p)
+            st.session_state["vhi_e"] = float(vhi_e)
+        except Exception:
+            pass
+
+
         sex_num = sex_to_num(row.get('성별', None))
 
         data_list.append([
@@ -1232,11 +1242,11 @@ if st.session_state.get('is_analyzed'):
     cc1, cc2 = st.columns([1, 1.2])
     with cc1:
         st.markdown("#### 🔊 청지각 평가")
-        p_artic = st.slider("조음 정확도", 0, 100, 50)
-        p_pitch = st.slider("음도", 0, 100, 50)
-        p_prange = st.slider("음도 범위", 0, 100, 50)
-        p_loud = st.slider("강도", 0, 100, 50)
-        p_rate = st.slider("말속도", 0, 100, 50)
+        p_artic = st.slider("조음 정확도", 0, 100, int(st.session_state.get("p_artic", 50)), key="p_artic")
+        p_pitch = st.slider("음도", 0, 100, int(st.session_state.get("p_pitch", 50)), key="p_pitch")
+        p_prange = st.slider("음도 범위", 0, 100, int(st.session_state.get("p_prange", 50)), key="p_prange")
+        p_loud = st.slider("강도", 0, 100, int(st.session_state.get("p_loud", 50)), key="p_loud")
+        p_rate = st.slider("말속도", 0, 100, int(st.session_state.get("p_rate", 50)), key="p_rate")
     with cc2:
         st.markdown("#### 📝 VHI-10")
         vhi_opts = [0, 1, 2, 3, 4]
@@ -1409,9 +1419,17 @@ if st.session_state.get('is_analyzed'):
                         # --- 표시/하이브리드 보정용 확률/청지각 점수(안전 파싱) ---
                         # Step2 클래스 확률을 라벨→확률 dict로 정리(이후 문구/혼합형 판단에 사용)
                         probs_map = {str(lbl): float(p) for lbl, p in zip(sub_classes, probs_sub)}
-                        percep_rate_score  = _safe_float(locals().get("p_rate"))
-                        
-                        # --- 말속도→조음 보정(임상 우선): 조음이 매우 낮고(≤25), 속도 청지각 신호가 높지 않으면(≤60) 조음으로 해석 ---
+
+                        # (안정성) 청지각 점수는 session_state에서 우선 읽고, 없으면 로컬 변수로 fallback
+                        percep_rate_score  = _safe_float(st.session_state.get("p_rate", locals().get("p_rate")))
+                        percep_artic_score = _safe_float(st.session_state.get("p_artic", locals().get("p_artic")))
+
+                        # (안정성) 하위집단 확률
+                        intensity_prob = _safe_float(probs_map.get("강도 집단"))
+                        rate_prob      = _safe_float(probs_map.get("말속도 집단"))
+                        jo_prob        = _safe_float(probs_map.get("조음 집단"))
+
+                        # --- 말속도→조음 보정(임상 우선): 조음이 낮고(≤40), 속도 청지각 신호가 높지 않으면(≤60) 조음 동반 가능 ---
                         rule_artic_soft = (percep_artic_score is not None) and (percep_artic_score <= 40) and ((percep_rate_score is None) or (percep_rate_score <= 60))
                         rule_artic_primary = (percep_artic_score is not None) and (percep_artic_score <= 25) and ((percep_rate_score is None) or (percep_rate_score <= 60))
                         hybrid_overrode_rate_to_artic = False
