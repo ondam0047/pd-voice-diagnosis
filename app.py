@@ -299,12 +299,12 @@ def _calibrate_pd_probability(p_raw,
 # ==========================================
 
 FEAT_LABELS_STEP1 = {
+    "F0_Z": "평균 음도(F0, 성별 정규화)",
     "F0": "평균 음도(F0)",
     "Range": "음도 범위(range)",
     "RangeNorm": "음도 범위/평균음도(Range/F0)",
     "Intensity": "평균 음성 강도(dB)",
     "SPS": "말속도(SPS)",
-    "Sex": "성별"
 }
 
 FEAT_LABELS_STEP2 = {
@@ -338,10 +338,19 @@ def _get_pipeline_parts(pipeline):
         pass
     return imputer, scaler, est
 
-def top_contrib_linear_binary(pipeline, x_row, feat_names, pos_label="Parkinson", topk=3):
-    """Return (pos_reasons, neg_reasons) from linear contributions for binary classifier.
-    x_row: 1D array-like of raw features in feat_names order.
+def top_contrib_linear_binary(pipeline, x_row, feat_names, pos_label="Parkinson", topk=3, exclude_feats=None, allow_sps=True, display_override=None):
+    """Return top contributors for linear binary estimator.
+
+    exclude_feats: iterable of feature names to skip (e.g., {"Sex"}).
+    allow_sps: if False, suppress SPS(말속도) in explanation to avoid 과도한 강조(컷오프 근처에서만 노출).
+    display_override: dict feature->string to show as input value.
     """
+    if exclude_feats is None:
+        exclude_feats = set()
+    else:
+        exclude_feats = set(exclude_feats)
+    display_override = display_override or {}
+
     imputer, scaler, est = _get_pipeline_parts(pipeline)
     X = np.asarray(x_row, dtype=float).reshape(1, -1)
     if imputer is not None:
@@ -351,35 +360,53 @@ def top_contrib_linear_binary(pipeline, x_row, feat_names, pos_label="Parkinson"
     else:
         Xs = X
 
-    # determine which row of coef corresponds to pos_label
-    classes = list(getattr(est, "classes_", []))
+    # binary logistic: coef_ shape (1, n_features)
     coef = getattr(est, "coef_", None)
-    if coef is None or len(coef) == 0:
+    classes = list(getattr(est, "classes_", []))
+    if coef is None or len(classes) < 2:
         return [], []
 
-    if len(classes) == 2 and coef.shape[0] == 1:
-        # sklearn binary logistic: coef_ is (1, n_features) for classes_[1]
-        pos_is_class1 = (len(classes) > 1 and classes[1] == pos_label)
-        w = coef[0]
-        contrib = Xs[0] * (w if pos_is_class1 else -w)
-    else:
-        # multi-output-like: fall back
-        w = coef[0]
-        contrib = Xs[0] * w
+    try:
+        pos_idx = classes.index(pos_label)
+    except Exception:
+        pos_idx = 1
 
-    # top contributors toward pos (positive contrib) and toward neg (negative contrib)
+    # for logistic regression, coef corresponds to class 1 vs 0 if binary; align with pos_label if possible
+    w = coef[0]
+    if classes[1] != pos_label:
+        w = -w
+
+    contrib = Xs[0] * w
+
     idx_sorted = np.argsort(np.abs(contrib))[::-1]
     pos, neg = [], []
     for i in idx_sorted:
         name = feat_names[i]
+        if name in exclude_feats:
+            continue
+        if (name == "SPS") and (not allow_sps):
+            continue
+
         label = FEAT_LABELS_STEP1.get(name, FEAT_LABELS_STEP2.get(name, name))
-        val = float(np.asarray(x_row, dtype=float)[i]) if np.isfinite(np.asarray(x_row, dtype=float)[i]) else None
+
+        # display value
+        if name in display_override:
+            val_str = str(display_override[name])
+        else:
+            try:
+                v = float(np.asarray(x_row, dtype=float)[i])
+                val_str = f"{v:.2f}" if np.isfinite(v) else ""
+            except Exception:
+                val_str = ""
+
         if contrib[i] >= 0 and len(pos) < topk:
-            pos.append(f"{label}이(가) 모델에서 PD 확률을 높이는 방향으로 기여했습니다" + (f" (입력: {val:.2f})" if val is not None else ""))
+            pos.append(f"{label}이(가) 모델에서 PD 확률을 높이는 방향으로 기여했습니다" + (f" (입력: {val_str})" if val_str else ""))
         elif contrib[i] < 0 and len(neg) < topk:
-            neg.append(f"{label}이(가) 모델에서 정상 확률을 높이는 방향으로 기여했습니다" + (f" (입력: {val:.2f})" if val is not None else ""))
+            neg.append(f"{label}이(가) 모델에서 정상 확률을 높이는 방향으로 기여했습니다" + (f" (입력: {val_str})" if val_str else ""))
+
         if len(pos) >= topk and len(neg) >= topk:
             break
+
     return pos, neg
 
 def top_contrib_linear_multiclass(pipeline, x_row, feat_names, pred_class, topk=3):
@@ -428,7 +455,7 @@ except:
 # ==========================================
 # [전역 설정] 폰트 및 변수
 # ==========================================
-FEATS_STEP1 = ['F0', 'Range', 'Intensity', 'SPS', 'Sex']  # Step1: Range는 성별/평균F0 영향을 받으므로 Range/F0 정규화 사용  # Step1 판정에는 VHI를 포함하지 않고(참고 지표로만 사용)
+FEATS_STEP1 = ['F0_Z', 'Range', 'Intensity', 'SPS']
 # Step2는 PD 하위집단 표본이 작아(특히 말속도 집단) 고차원 특성에 불안정합니다.
 # 임상적으로 구분력이 큰 핵심 변수(강도/말속도/조음)만 사용합니다.
 FEATS_STEP2 = ['Intensity', 'SPS', 'P_Loudness', 'P_Rate', 'P_Artic']
@@ -593,16 +620,52 @@ def compute_cutoffs_from_training(_file_mtime=None):
             df[col] = df[col].fillna(0.0)
 
     # ---------- Step1: Normal vs PD cut-off (LOO OOF) ----------
-    
-    # Step1 보강: Range(Hz)는 평균F0/성별의 영향을 크게 받습니다.
-    # 학습/추정 모두에서 Range/F0 정규화(RangeNorm)를 사용해 성별 편향 및 F0 스케일 문제를 완화합니다.
-    if 'RangeNorm' not in df.columns:
-        try:
-            _f0 = pd.to_numeric(df.get('F0'), errors='coerce')
-            _rng = pd.to_numeric(df.get('Range'), errors='coerce')
-            df['RangeNorm'] = (_rng / _f0.replace(0, np.nan)).replace([np.inf, -np.inf], np.nan)
-        except Exception:
-            df['RangeNorm'] = np.nan
+
+    # Step1 보강: 평균음도(F0)는 성별에 따라 절대값 스케일이 크게 다릅니다.
+    # 성별은 Step1 모델 입력에서 제외하는 대신, F0를 성별 기준 z-score로 정규화(F0_Z)하여 편향을 완화합니다.
+    try:
+        f0_series = pd.to_numeric(df.get('F0'), errors='coerce')
+        sex_series = pd.to_numeric(df.get('Sex'), errors='coerce')
+
+        f0_all = f0_series.dropna()
+        all_mean = float(f0_all.mean()) if len(f0_all) > 0 else 0.0
+        all_std = float(f0_all.std(ddof=0)) if len(f0_all) > 1 else 1.0
+        if (not np.isfinite(all_std)) or all_std < 1e-6:
+            all_std = 1.0
+
+        params = {'ALL': {'mean': all_mean, 'std': all_std}}
+        for sex_val, key in [(1.0, 'M'), (0.0, 'F')]:
+            s = f0_series[sex_series == sex_val].dropna()
+            if len(s) > 0:
+                m_ = float(s.mean())
+                sd_ = float(s.std(ddof=0)) if len(s) > 1 else all_std
+                if (not np.isfinite(sd_)) or sd_ < 1e-6:
+                    sd_ = all_std if all_std > 1e-6 else 1.0
+                params[key] = {'mean': m_, 'std': sd_}
+            else:
+                params[key] = params['ALL']
+
+        def _f0z(row_f0, row_sex):
+            try:
+                sx = float(row_sex)
+            except Exception:
+                sx = 0.5
+            if sx >= 0.75:
+                p = params.get('M', params['ALL'])
+            elif sx <= 0.25:
+                p = params.get('F', params['ALL'])
+            else:
+                p = params['ALL']
+            try:
+                return (float(row_f0) - p['mean']) / p['std']
+            except Exception:
+                return np.nan
+
+        df['F0_Z'] = [_f0z(f, s) for f, s in zip(f0_series, sex_series)]
+        st.session_state['f0_norm_params'] = params
+    except Exception:
+        df['F0_Z'] = np.nan
+        st.session_state['f0_norm_params'] = {'ALL': {'mean': 0.0, 'std': 1.0}, 'M': {'mean': 0.0, 'std': 1.0}, 'F': {'mean': 0.0, 'std': 1.0}}
 
     X1 = df[FEATS_STEP1].copy()
     y1 = df["Diagnosis"].astype(str).values
@@ -1130,7 +1193,7 @@ def run_analysis_logic(file_path, gender=None):
     except Exception as e:
         st.error(f"분석 오류: {e}"); return False
 
-def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e, sex=None):
+def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e, sex=None, p_pd=None, pd_cut=None):
     positives, negatives = [], []
     if vhi < 15: positives.append(f"환자 본인의 주관적 불편함(VHI {vhi}점)이 낮아, 일상 대화에 심리적/기능적 부담이 적은 상태입니다.")
     # (임상 안정성) 남성은 정상에서도 음도범위가 상대적으로 좁을 수 있어 기준을 완화합니다.
@@ -1148,7 +1211,15 @@ def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e, 
     if db >= 60: positives.append(f"평균 음성 강도가 {db:.1f} dB로, 일반적인 대화 수준(60dB 이상)의 성량을 튼튼하게 유지하고 있습니다.")
 
     if db < 60: negatives.append(f"평균 음성 강도가 {db:.1f} dB로 낮게 측정되었습니다(※ 마이크/거리/환경에 따라 절대값은 달라질 수 있으며, 본 도구의 모델 기준으로 낮은 편입니다). 이는 파킨슨병에서 흔한 강도 감소(Hypophonia) 패턴과 유사하여 발성 훈련이 필요할 수 있습니다.")
-    if sps >= 5.8: negatives.append(f"말속도가 {sps:.2f} SPS로 빠른 편입니다. 정상 성인에서도 빠른 말속도는 나타날 수 있으나, 일부 PD 학습군의 말속도/리듬 특징과 겹칠 수 있어 추가 확인이 필요합니다.")
+    # 말속도(SPS) fast는 정상에서도 흔하므로, 컷오프 근처에서만 경고 근거로 노출합니다.
+    near_cut = True
+    try:
+        if (p_pd is not None) and (pd_cut is not None):
+            near_cut = abs(float(p_pd) - float(pd_cut)) <= 0.08
+    except Exception:
+        near_cut = True
+    if (sps >= 5.8) and near_cut:
+        negatives.append(f"말속도가 {sps:.2f} SPS로 빠른 편입니다. 정상 성인에서도 빠른 말속도는 나타날 수 있으나, 컷오프 근처에서는 PD 학습군의 말속도/리듬 특징과 겹칠 수 있어 추가 확인이 필요합니다.")
     if artic < 70: negatives.append(f"청지각적 조음 정확도가 {artic}점으로 다소 낮습니다. 발음이 불분명해지는 조음 장애(Dysarthria) 징후가 관찰됩니다.")
     if vhi >= 20: negatives.append(f"VHI 총점이 {vhi}점으로 높습니다. 환자 스스로 음성 문제로 인한 생활의 불편함과 심리적 위축을 크게 느끼고 있습니다.")
     if vhi_e >= 5: negatives.append("특히 VHI 정서(E) 점수가 높아, 말하기에 대한 불안감이나 자신감 저하가 감지됩니다.")
@@ -1415,8 +1486,26 @@ if st.session_state.get('is_analyzed'):
                 except Exception:
                     pass
 
+                # 성별은 모델 입력에서 제외하지만, F0는 성별 기준으로 정규화(F0_Z)합니다.
+                params = st.session_state.get('f0_norm_params') or {'ALL': {'mean': 0.0, 'std': 1.0}, 'M': {'mean': 0.0, 'std': 1.0}, 'F': {'mean': 0.0, 'std': 1.0}}
+                try:
+                    if sex_num_ui >= 0.75:
+                        p_ = params.get('M', params['ALL'])
+                    elif sex_num_ui <= 0.25:
+                        p_ = params.get('F', params['ALL'])
+                    else:
+                        p_ = params['ALL']
+                    mu_ = float(p_.get('mean', 0.0))
+                    sd_ = float(p_.get('std', 1.0))
+                    if (not np.isfinite(sd_)) or sd_ < 1e-6:
+                        sd_ = 1.0
+                    f0_z_used = (float(f0_in) - mu_) / sd_
+                except Exception:
+                    f0_z_used = np.nan
+                st.session_state['step1_f0_z_used'] = f0_z_used
+
                 input_1 = pd.DataFrame([[
-                    f0_in, pr_used, db_in, sps_in, sex_num_ui
+                    f0_z_used, pr_used, db_in, sps_in
                 ]], columns=FEATS_STEP1)
 
                 proba_1 = model_step1.predict_proba(input_1.to_numpy())[0]
@@ -1762,13 +1851,42 @@ if st.session_state.get('is_analyzed'):
 
             # 해석 텍스트
             st.caption('※ 자가보고(VHI)는 **판정 확률 계산에는 사용하지 않고**, 해석/경고를 위한 참고 지표로만 표시됩니다.')
-            positives, negatives = generate_interpretation(prob_normal, final_db, final_sps, range_adj, p_artic, vhi_total, vhi_e, sex=subject_gender)
+            positives, negatives = generate_interpretation(prob_normal, final_db, final_sps, range_adj, p_artic, vhi_total, vhi_e, sex=subject_gender, p_pd=p_pd, pd_cut=pd_cut)
 
             # --- [설명 보강] 규칙 기반 설명이 비어있을 때: 모델 TOP 기여 변수로 최소 3개 생성 ---
             # --- 자동 설명(모델 기여도): 실패해도 이유가 비지 않도록 ---
-            x1_row = [st.session_state.get('f0_mean'), st.session_state.get('step1_range_used', range_adj if 'range_adj' in locals() else st.session_state.get('pitch_range')), final_db, final_sps, sex_num_ui]
+            x1_row = [
+                st.session_state.get('step1_f0_z_used', np.nan),
+                st.session_state.get('step1_range_used', range_adj if 'range_adj' in locals() else st.session_state.get('pitch_range')),
+                final_db,
+                final_sps,
+            ]
+
+            # SPS 근거는 cut-off 근처에서만 과도하게 강조되지 않도록 제한
+            near_cutoff_sps = True
             try:
-                pos_auto, neg_auto = top_contrib_linear_binary(model_step1, x1_row, FEATS_STEP1, pos_label="Parkinson", topk=3)
+                near_cutoff_sps = abs(float(p_pd) - float(pd_cut)) <= 0.08
+            except Exception:
+                near_cutoff_sps = True
+
+            disp_map = {
+                'F0_Z': f"{float(f0_in):.2f}Hz (z={float(st.session_state.get('step1_f0_z_used', np.nan)):.2f})" if f0_in is not None else '',
+                'Range': f"{float(pr_used):.2f}" if pr_used is not None else '',
+                'Intensity': f"{float(final_db):.2f}" if final_db is not None else '',
+                'SPS': f"{float(final_sps):.2f}" if final_sps is not None else '',
+            }
+
+            try:
+                pos_auto, neg_auto = top_contrib_linear_binary(
+                    model_step1,
+                    x1_row,
+                    FEATS_STEP1,
+                    pos_label="Parkinson",
+                    topk=3,
+                    exclude_feats={"Sex"},
+                    allow_sps=near_cutoff_sps,
+                    display_override=disp_map,
+                )
                 # 정상 확률 설명이 비면(또는 너무 짧으면) 자동 설명을 섞어줌
                 if not positives or len(positives) < 1:
                     positives = (positives or []) + (neg_auto[:3] if neg_auto else [])
