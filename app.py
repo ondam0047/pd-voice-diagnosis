@@ -1241,9 +1241,9 @@ if st.session_state.get('is_analyzed'):
                         if _is_mixed and (_top2_lbl is not None):
                             # 혼합형(임상용) 문구: 우세/동반을 명시
                             if (_top1_lbl == "강도 집단") and (_top2_lbl == "조음 집단"):
-                                st.info(f"➡️ PD 하위 집단 예측: **혼합형(강도 집단 우세, 조음 집단 동반)** (Top1: 강도 집단 {_top1_p*100:.1f}%, Top2: 조음 집단 {_top2_p*100:.1f}%). **강도 집단에 포함될 가능성이 더 높으며, 조음 문제를 동반할 수 있습니다.**")
+                                st.info(f"➡️ PD 하위 집단 예측 : **혼합형**으로 강도 집단에 포함될 가능성이 더 높으며, 조음 문제를 동반할 수 있습니다(강도 집단 {_top1_p*100:.1f}%, 조음 집단 {_top2_p*100:.1f}%).")
                             else:
-                                st.info(f"➡️ PD 하위 집단 예측: **혼합형({_top1_lbl} 우세, {_top2_lbl} 동반)** (Top1: {_top1_lbl} {_top1_p*100:.1f}%, Top2: {_top2_lbl} {_top2_p*100:.1f}%). **Top1 범주 가능성이 더 높지만 Top2 소견도 동반될 수 있습니다.**")
+                                st.info(f"➡️ PD 하위 집단 예측 : **혼합형**으로 {_top1_lbl}에 포함될 가능성이 더 높으며, {_top2_lbl} 소견을 동반할 수 있습니다({_top1_lbl} {_top1_p*100:.1f}%, {_top2_lbl} {_top2_p*100:.1f}%).")
                         else:
                             st.info(f"➡️ PD 하위 집단 예측: **{pred_sub_final}** ({pred_prob*100:.1f}%)")
 
@@ -1258,9 +1258,9 @@ if st.session_state.get('is_analyzed'):
 
                         rule_artic = (percep_artic_score is not None) and (percep_artic_score <= 40) and ((rate_prob is None) or (rate_prob < 0.45))
                         if rule_artic and pred_sub == "강도 집단" and jo_prob is not None and jo_prob > 0:
-                            st.info("🧩 하이브리드 신호: 조음 정확도 저하(≤40) + 속도 신호 높지 않음 → 강도 우세이지만 **조음 동반 가능(혼합형)** 이 있습니다. (라벨 보정 없음)")
+                            st.info("🧩 하이브리드 분석 결과 강도 집단에 포함될 가능성이 더 높으며, 조음 동반 가능성(혼합형)이 있습니다. (라벨 보정 없음)")
                         elif rule_artic:
-                            st.info("🧩 하이브리드 신호: 조음 정확도 저하(≤40) + 속도 신호 높지 않음 → **조음 저하 동반 가능** 이 있습니다. (라벨 보정 없음)")
+                            st.info("🧩 하이브리드 분석 결과 조음 저하 동반 가능성이 있습니다. (라벨 보정 없음)")
                         elif pred_sub == "강도 집단" and jo_prob is not None and _top2_lbl == "조음 집단" and ((_top1_p - _top2_p) < MIX_MARGIN_P):
                             st.info(f"🧩 혼합 패턴: 강도({_top1_p*100:.1f}%) 우세이나 조음({_top2_p*100:.1f}%)도 근접합니다 → **혼합형(강도 우세, 조음 동반)** 으로 해석하세요.")
                         else:
@@ -1411,7 +1411,7 @@ if st.session_state.get('is_analyzed'):
 
                     if _is_mixed_r and (_top2_lbl_r is not None):
                         if (_top1_lbl_r == "강도 집단") and (_top2_lbl_r == "조음 집단"):
-                            st.info(f"➡️ PD 하위 집단 예측(참고): **혼합형(강도 집단 우세, 조음 집단 동반)** (Top1: 강도 집단 {_top1_p_r*100:.1f}%, Top2: 조음 집단 {_top2_p_r*100:.1f}%). **강도 집단 가능성이 더 높고, 조음 저하가 동반될 수 있습니다.**")
+                            st.info(f"➡️ PD 하위 집단 예측(참고) : **혼합형**으로 강도 집단에 포함될 가능성이 더 높으며, 조음 저하를 동반할 수 있습니다(강도 집단 {_top1_p_r*100:.1f}%, 조음 집단 {_top2_p_r*100:.1f}%).")
                         else:
                             st.info(f"➡️ PD 하위 집단 예측(참고): **혼합형({_top1_lbl_r} 우세, {_top2_lbl_r} 동반)** (Top1: {_top1_lbl_r} {_top1_p_r*100:.1f}%, Top2: {_top2_lbl_r} {_top2_p_r*100:.1f}%).")
                     else:
@@ -1426,9 +1426,9 @@ if st.session_state.get('is_analyzed'):
 
                     rule_artic_ref = (percep_artic_score_ref is not None) and (percep_artic_score_ref <= 40) and ((rate_prob_ref is None) or (rate_prob_ref < 0.45))
                     if rule_artic_ref and pred_sub_ref == "강도 집단" and jo_prob_ref is not None and jo_prob_ref > 0:
-                        st.info("🧩 하이브리드 신호(참고): 조음 정확도 저하(≤40) + 속도 신호 높지 않음 → 강도 우세이지만 **조음 동반 가능(혼합형)** 이 있습니다. (라벨 보정 없음)")
+                        st.info("🧩 하이브리드 분석 결과(참고) 강도 집단에 포함될 가능성이 더 높으며, 조음 동반 가능성(혼합형)이 있습니다. (라벨 보정 없음)")
                     elif rule_artic_ref:
-                        st.info("🧩 하이브리드 신호(참고): 조음 정확도 저하(≤40) + 속도 신호 높지 않음 → **조음 저하 동반 가능** 이 있습니다. (라벨 보정 없음)")
+                        st.info("🧩 하이브리드 분석 결과(참고) 조음 저하 동반 가능성이 있습니다. (라벨 보정 없음)")
                     elif pred_sub_ref == "강도 집단" and jo_prob_ref is not None and _top2_lbl_r == "조음 집단" and ((_top1_p_r - _top2_p_r) < MIX_MARGIN_P):
                         st.info(f"🧩 혼합 패턴(참고): 강도({_top1_p_r*100:.1f}%) 우세이나 조음({_top2_p_r*100:.1f}%)도 근접합니다 → **혼합형(강도 우세, 조음 동반)** 으로 해석하세요.")
                     # Radar chart
