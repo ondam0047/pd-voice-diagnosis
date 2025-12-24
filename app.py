@@ -114,13 +114,19 @@ def get_step1_training_stats(_file_mtime=None):
 def explain_step1_by_training(stats, x_dict, topk=3):
     """
     학습데이터(중앙값) 기준으로 입력값이 PD/정상 중 어디에 더 가까운지 설명 문장 생성.
-    Return: (reasons_normal, reasons_pd)
+
+    Return:
+        reasons_normal: 정상 중앙값 쪽으로 더 가까운(또는 정상 쪽을 지지하는) 근거 TOP-K
+        reasons_pd_strict: PD 중앙값 쪽으로 '명확히' 더 가까운 근거 TOP-K
+        reasons_pd_closest: (경계/애매 구간 대비) PD 중앙값에 상대적으로 '가까운' 항목 TOP-K
+            - 정상 중앙값이 더 가깝더라도, PD 중앙값과의 거리 기준으로 상위 항목을 반환
+            - 임상용: PD 확률이 cut-off 근처일 때 "어떤 지표가 PD 학습군과 유사했는지"를 공란 없이 보여주기 위함
     """
     if not stats:
-        return [], []
+        return [], [], []
 
-    reasons_pd, reasons_n = [], []
-    scored = []
+    reasons_pd_strict, reasons_n, reasons_pd_closest = [], [], []
+    scored = []  # (abs_strength, strength, closeness_pd, f, x, pd_med, n_med)
 
     for f, s in stats.items():
         if f not in x_dict:
@@ -128,6 +134,8 @@ def explain_step1_by_training(stats, x_dict, topk=3):
         try:
             x = float(x_dict[f])
         except Exception:
+            continue
+        if np.isnan(x):
             continue
 
         pd_med = s.get("pd_med")
@@ -138,37 +146,62 @@ def explain_step1_by_training(stats, x_dict, topk=3):
         d_pd = abs(x - pd_med)
         d_n = abs(x - n_med)
         denom = abs(n_med - pd_med) + 1e-6
-        strength = float((d_n - d_pd) / denom)  # +면 PD쪽, -면 정상쪽
-        scored.append((abs(strength), strength, f, x, pd_med, n_med))
 
-    scored.sort(reverse=True, key=lambda t: t[0])
+        # +면 PD쪽, -면 정상쪽 (중앙값 기준 상대적 가까움)
+        strength = float((d_n - d_pd) / denom)
+        abs_strength = abs(strength)
 
-    for _, strength, f, x, pd_med, n_med in scored:
+        # PD 중앙값과의 상대적 근접도(0~1 근사): 1에 가까울수록 PD 중앙값에 가까움
+        closeness_pd = float(max(0.0, 1.0 - (d_pd / denom)))
+
+        scored.append((abs_strength, strength, closeness_pd, f, x, pd_med, n_med))
+
+    if not scored:
+        return [], [], []
+
+    scored.sort(reverse=True, key=lambda t: (t[0], t[2]))
+
+    def _fmt(f, x, pd_med, n_med):
         if f == "강도(dB)":
-            name, unit, fmt = "평균 음성 강도", "dB", f"{x:.1f}dB"
+            name, fmt = "평균 음성 강도", f"{x:.1f}dB"
             pd_fmt, n_fmt = f"{pd_med:.1f}dB", f"{n_med:.1f}dB"
         elif f == "Range":
-            name, unit, fmt = "음도 범위", "Hz", f"{x:.1f}Hz"
+            name, fmt = "음도 범위", f"{x:.1f}Hz"
             pd_fmt, n_fmt = f"{pd_med:.1f}Hz", f"{n_med:.1f}Hz"
         elif f == "F0":
-            name, unit, fmt = "평균 음도(F0)", "Hz", f"{x:.1f}Hz"
+            name, fmt = "평균 음도(F0)", f"{x:.1f}Hz"
             pd_fmt, n_fmt = f"{pd_med:.1f}Hz", f"{n_med:.1f}Hz"
         elif f == "SPS":
-            name, unit, fmt = "말속도(SPS)", "", f"{x:.2f}"
+            name, fmt = "말속도(SPS)", f"{x:.2f}"
             pd_fmt, n_fmt = f"{pd_med:.2f}", f"{n_med:.2f}"
         else:
             name, fmt = f, f"{x:.3f}"
             pd_fmt, n_fmt = f"{pd_med:.3f}", f"{n_med:.3f}"
+        return name, fmt, pd_fmt, n_fmt
 
-        if strength > 0 and len(reasons_pd) < topk:
-            reasons_pd.append(f"{name}가 {fmt}로 **정상 중앙값({n_fmt})보다 PD 중앙값({pd_fmt})에 더 가깝습니다**.")
+    # 1) '명확히' 더 가까운 근거(방향 포함)
+    for _, strength, closeness_pd, f, x, pd_med, n_med in scored:
+        name, fmt, pd_fmt, n_fmt = _fmt(f, x, pd_med, n_med)
+
+        if strength > 0 and len(reasons_pd_strict) < topk:
+            reasons_pd_strict.append(f"{name}가 {fmt}로 **정상 중앙값({n_fmt})보다 PD 중앙값({pd_fmt})에 더 가깝습니다**.")
         elif strength < 0 and len(reasons_n) < topk:
             reasons_n.append(f"{name}가 {fmt}로 **PD 중앙값({pd_fmt})보다 정상 중앙값({n_fmt})에 더 가깝습니다**.")
 
-        if len(reasons_pd) >= topk and len(reasons_n) >= topk:
+        if len(reasons_pd_strict) >= topk and len(reasons_n) >= topk:
             break
 
-    return reasons_n[:topk], reasons_pd[:topk]
+    # 2) 경계용: PD 중앙값 '근접도' 상위 항목(방향 무관)
+    scored_by_pd = sorted(scored, reverse=True, key=lambda t: t[2])
+    for _, strength, closeness_pd, f, x, pd_med, n_med in scored_by_pd:
+        if len(reasons_pd_closest) >= topk:
+            break
+        name, fmt, pd_fmt, n_fmt = _fmt(f, x, pd_med, n_med)
+        reasons_pd_closest.append(
+            f"{name}가 {fmt}이며, **PD 중앙값({pd_fmt})과의 거리가 비교적 가깝습니다**(정상 중앙값 {n_fmt})."
+        )
+
+    return reasons_n[:topk], reasons_pd_strict[:topk], reasons_pd_closest[:topk]
 
 
 # --- 페이지 기본 설정 ---
@@ -1413,14 +1446,9 @@ if st.session_state.get('is_analyzed'):
             # --- 최종 안전장치: 이유 리스트 공란 방지 (try 밖에서 무조건 실행) ---
             if not positives:
                 positives = ["입력값들이 학습 데이터 기준에서 정상 범위에 비교적 가깝게 나타났습니다."]
-            if not negatives:
-                # PD 확률이 낮더라도 cut-off 근처(경계)일 때는 이유를 보여주는 것이 임상적으로 유용
-                if abs(p_pd - pd_cut) <= 0.10:
-                    negatives = [f"PD 확률이 cut-off({pd_cut:.2f}) 근처입니다(PD={p_pd*100:.1f}%). 일부 지표가 PD 학습군과 유사할 수 있어 추가 평가/추적을 권장합니다."]
-                else:
-                    negatives = [f"모델이 일부 지표를 PD 학습군과 유사하게 해석했습니다(PD={p_pd*100:.1f}%). 추가 평가/추적을 권장합니다."]
-
-                            # --- Step1 해석 타이틀/순서(확률 구간에 따라) + 설명 공란 방지 ---
+            # negatives(=PD 가능성 근거)는 학습데이터 기반/규칙 기반 근거를 합친 뒤에도 비어있을 수 있어,
+            # 여기서는 미리 채우지 않고 아래에서 '공란 방지' 로직으로 안전하게 보강합니다.
+# --- Step1 해석 타이틀/순서(확률 구간에 따라) + 설명 공란 방지 ---
                 band_code = st.session_state.get("step1_band_code", None)
 
                 # 학습데이터 기반 '가까움' 설명(안전장치)
@@ -1439,25 +1467,34 @@ if st.session_state.get('is_analyzed'):
                     "강도(dB)": final_db,
                     "SPS": final_sps,
                 }
-                n_like, pd_like = explain_step1_by_training(stats_step1, x_dict, topk=3)
+                n_like, pd_like_strict, pd_like_closest = explain_step1_by_training(stats_step1, x_dict, topk=3)
 
-                # 자동 설명이 비어있거나, 컷오프 근처이면(=임상적으로 애매) 학습데이터 기반 설명을 보강
-                if (not positives) and n_like:
+                # 학습데이터(중앙값) 기반 근거를 보강
+                if n_like:
                     positives = list(dict.fromkeys((positives or []) + n_like))
-                if ((not negatives) or (abs(p_pd - pd_cut) <= 0.10)) and pd_like:
+
+                # PD 근거는 '명확히 PD쪽'이 있으면 우선 사용, 없고 cut-off 근처(경계)라면
+                # 'PD 중앙값과 상대적으로 가까운 항목'을 보여줘서 공란을 방지합니다.
+                borderline = abs(p_pd - pd_cut) <= 0.10
+                pd_like = pd_like_strict if pd_like_strict else (pd_like_closest if borderline else [])
+                if pd_like:
                     negatives = list(dict.fromkeys((negatives or []) + pd_like))
 
-                # 그래도 비면(학습통계도 없거나 입력 누락) 최소 1문장 보장
+                # 컷오프 근처이면 첫 줄을 경계 안내로 고정(그리고 아래에 "어떤 지표"인지 반드시 보여줌)
+                if borderline:
+                    border_note = f"PD 확률이 cut-off({pd_cut:.2f}) 근처의 **경계 구간**입니다(PD={p_pd*100:.1f}%). 아래 지표를 중심으로 추가 평가/재측정을 권장합니다."
+                    # 경계인데도 negatives가 비어있으면(입력 누락/통계 없음) 한 줄은 보장
+                    if not negatives:
+                        negatives = ["(입력값/학습데이터 통계가 충분하지 않아 특정 지표를 제시하기 어렵습니다. 동일 조건으로 재측정 후 비교하세요.)"]
+                    negatives = [border_note] + [t for t in negatives if t != border_note]
+
+                # 그래도 비면(학습통계가 없거나 입력 누락) 최소 1문장 보장
                 if not negatives:
-                    negatives = [f"PD 확률이 cut-off({pd_cut:.2f}) 근처이거나 낮습니다(PD={p_pd*100:.1f}%). 다만 일부 지표는 PD 학습군과 유사할 수 있어 추가 평가/추적을 권장합니다."]
-
-                # 컷오프 근처이면 첫 줄을 경계 안내로 고정(원인+권고)
-                if abs(p_pd - pd_cut) <= 0.10:
-                    border_note = f"PD 확률이 cut-off({pd_cut:.2f}) 근처입니다(PD={p_pd*100:.1f}%). 아래 지표들이 PD 학습군과 더 유사했습니다."
-                    if border_note not in negatives:
-                        negatives = [border_note] + negatives
-
-                # 타이틀 톤: 더 높은 쪽(주결론) 먼저 보여주기
+                    if p_pd >= pd_cut:
+                        negatives = [f"PD 확률이 cut-off({pd_cut:.2f})를 넘었습니다(PD={p_pd*100:.1f}%). 일부 지표가 PD 학습군과 유사할 수 있어 추가 평가/추적을 권장합니다."]
+                    else:
+                        negatives = [f"PD 확률은 낮지만(PD={p_pd*100:.1f}%), 일부 지표가 PD 학습군과 유사할 수 있어 추적 관찰을 권장합니다."]
+# 타이틀 톤: 더 높은 쪽(주결론) 먼저 보여주기
                 primary_is_pd = bool(p_pd >= pd_cut)
 
                 band_suffix = {
