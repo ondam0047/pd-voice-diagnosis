@@ -1659,35 +1659,44 @@ if st.session_state.get('is_analyzed'):
                         # --- (표시용) 하위집단 최종 표기 라벨/확률/레이더 순서 조정 ---
                         display_sub = pred_sub
                         display_prob = pred_prob
-                        labels_plot = list(sub_classes)
-                        probs_plot = np.array(probs_sub, dtype=float)
-                        probs_plot_raw = probs_plot.copy()
                         contrib_target = pred_sub
-                        
-                        if hybrid_overrode_rate_to_artic and ("조음 집단" in probs_map):
+
+                        # 원본 확률(모델) 맵
+                        probs_model_map = {lab: float(probs_map.get(lab, 0.0)) for lab in sub_classes}
+
+                        # 표시용 확률(임상 우선) 맵: 최종 문구와 시각화가 일치하도록, 필요 시 '완만한 부스트' 후 정규화
+                        probs_display_map = dict(probs_model_map)
+
+                        if hybrid_overrode_rate_to_artic and ("조음 집단" in probs_display_map):
                             display_sub = "조음 집단"
-                            display_prob = float(probs_map.get("조음 집단", pred_prob))
                             contrib_target = display_sub
-                            # 기록/전송용 결론도 '조음 우선 혼합형'으로 표기(모델 확률은 아래에 병기됨)
+                            # 기록/전송용 결론도 '조음 우선 혼합형'으로 표기(모델 원확률은 아래에 병기됨)
                             final_decision = "혼합형(조음 우선)"
-                            desired_order = ["조음 집단", "말속도 집단", "강도 집단"]
-                            labels_plot = [x for x in desired_order if x in sub_classes] + [x for x in sub_classes if x not in desired_order]
-                            probs_plot = np.array([float(probs_map.get(x, 0.0)) for x in labels_plot], dtype=float)
-                            probs_plot_raw = probs_plot.copy()
-                            # 임상 우선 표기(display_sub)가 모델 Top1과 다를 때, 레이더/표시 확률은 display_sub가 최상위가 되도록 미세 조정
-                            try:
-                                if (display_sub in labels_plot) and (pred_sub in labels_plot) and (display_sub != pred_sub):
-                                    probs_plot = _adjust_display_probs_override(
-                                        {lab: float(probs_map.get(lab, 0.0)) for lab in sub_classes},
-                                        target_label=display_sub,
-                                        base_label=pred_sub,
-                                        order=labels_plot,
-                                        eps=0.002,
-                                    )
-                            except Exception:
-                                probs_plot = probs_plot_raw
-                        
-                        # ---- Spider/Radar chart: PD 하위집단 확률 시각화 (원래 UI 복원) ----
+
+                            # 말속도 vs 조음이 비슷할 때(혼합형) 조음을 우선 고려한다고 문구가 나간다면,
+                            # 레이더/표시 확률도 조음이 Top1이 되도록 "완만하게" 부스트합니다.
+                            # (강제 라벨 뒤집기/과도한 조작 방지 목적)
+                            boost = 1.50
+                            probs_display_map["조음 집단"] = float(probs_display_map.get("조음 집단", 0.0)) * boost
+
+                        # 표시 맵 정규화
+                        s_disp = float(sum(probs_display_map.values()))
+                        if (not np.isfinite(s_disp)) or (s_disp <= 0):
+                            probs_display_map = dict(probs_model_map)
+                            s_disp = float(sum(probs_display_map.values())) if sum(probs_display_map.values()) else 1.0
+                        for k in list(probs_display_map.keys()):
+                            probs_display_map[k] = float(probs_display_map.get(k, 0.0)) / s_disp
+
+                        display_prob = float(probs_display_map.get(display_sub, pred_prob))
+
+                        # 레이더 표시 순서(고정): 조음 -> 말속도 -> 강도
+                        desired_order = ["조음 집단", "말속도 집단", "강도 집단"]
+                        labels_plot = [x for x in desired_order if x in sub_classes] + [x for x in sub_classes if x not in desired_order]
+
+                        probs_plot = np.array([float(probs_display_map.get(x, 0.0)) for x in labels_plot], dtype=float)
+                        probs_plot_raw = np.array([float(probs_model_map.get(x, 0.0)) for x in labels_plot], dtype=float)
+
+# ---- Spider/Radar chart: PD 하위집단 확률 시각화 (원래 UI 복원) ----
                         try:
                             labels = labels_plot
                             labels_with_probs = [f"{label}\n({prob*100:.1f}%)" for label, prob in zip(labels, probs_plot)]
