@@ -11,6 +11,9 @@ import platform
 import datetime
 import io
 
+# --- Step1 학습 통계(가드/해석용) ---
+STATS_STEP1 = {}
+
 # --- 구글 시트 & 이메일 라이브러리 ---
 from google.oauth2 import service_account
 import gspread
@@ -592,6 +595,7 @@ def compute_cutoffs_from_training(_file_mtime=None):
 
 
         sex_num = sex_to_num(row.get('성별', None))
+        sex_list.append(sex_num)
 
         data_list.append([
             row.get('F0', 0), row.get('Range', 0), row.get('강도(dB)', 0), row.get('SPS', 0),
@@ -850,6 +854,7 @@ def train_models(cache_buster: str = "v28_3_2"):
 
     # ---------- Step1 ----------
     X1_rows, y1 = [], []
+    sex_list = []  # Step1 통계(성별 중앙값 등) 계산용
     for _, row in raw.iterrows():
         diag, _sub = _label_to_diag_and_sub(row.get('진단결과 (Label)', ''))
         if diag is None:
@@ -881,22 +886,35 @@ def train_models(cache_buster: str = "v28_3_2"):
 
     X1 = np.array(X1_rows, dtype=float)
     
+
     # Step1 학습 데이터 기반 기준값(가드/해석용)
-    # Range는 성별/과제/무성구간 처리에 민감해 정상 오탐을 유발할 수 있어,
-    # "정상 케이스 + 다른 지표 양호" 조건에서 중립값으로 대체하는 가드에 사용합니다.
+    # - Range는 성별/과제/무성구간 처리에 민감해 정상 오탐을 유발할 수 있어,
+    #   "정상 정황" 조건에서 중립값으로 대체하는 가드에 사용합니다.
+    # - 강도(dB)/SPS는 장비·환경 차이로 스케일이 흔들릴 수 있어,
+    #   NORMAL 분포의 퍼센타일을 이용해 완만한 보정(클램프)에 사용합니다.
+    global STATS_STEP1
     try:
-        X1_arr = np.array(X1_rows, dtype=float)
+        X1_arr = np.array(X1_rows, dtype=float)  # [f0_z, range, db, sps]
         y1_arr = np.array(y1, dtype=str)
+        sex_arr = np.array(sex_list, dtype=float)
+
         _range_all = X1_arr[:, 1]
         _db_all = X1_arr[:, 2]
         _sps_all = X1_arr[:, 3]
-        _sex_all = X1_arr[:, 4]
         _is_norm = (y1_arr == 'Normal')
+
         # Range medians (sex-stratified) used for '오탐 방지' 가드
-        median_range_all = float(np.nanmedian(_range_all))
-        median_range_m = float(np.nanmedian(_range_all[_sex_all == 0])) if np.any(_sex_all == 0) else median_range_all
-        median_range_f = float(np.nanmedian(_range_all[_sex_all == 1])) if np.any(_sex_all == 1) else median_range_all
-        # Intensity/SPS quantiles from NORMAL only (device/env mismatch 방어용 winsorization)
+        median_range_all = float(np.nanmedian(_range_all)) if np.any(np.isfinite(_range_all)) else 100.0
+        if np.any(sex_arr == 0):
+            median_range_m = float(np.nanmedian(_range_all[sex_arr == 0]))
+        else:
+            median_range_m = median_range_all
+        if np.any(sex_arr == 1):
+            median_range_f = float(np.nanmedian(_range_all[sex_arr == 1]))
+        else:
+            median_range_f = median_range_all
+
+        # Intensity/SPS quantiles from NORMAL only
         if np.any(_is_norm):
             _db_norm = _db_all[_is_norm]
             _sps_norm = _sps_all[_is_norm]
@@ -905,7 +923,8 @@ def train_models(cache_buster: str = "v28_3_2"):
         else:
             db_p05, db_p50, db_p95 = 65.0, 70.0, 76.0
             sps_p95 = 5.0
-        globals()['STATS_STEP1'] = {
+
+        STATS_STEP1 = {
             'median_range_all': median_range_all,
             'median_range_m': median_range_m,
             'median_range_f': median_range_f,
@@ -915,11 +934,13 @@ def train_models(cache_buster: str = "v28_3_2"):
             'sps_p95_norm': sps_p95,
         }
     except Exception:
-        globals()['STATS_STEP1'] = {
+        STATS_STEP1 = {
             'median_range_all': 100.0, 'median_range_m': 90.0, 'median_range_f': 120.0,
             'db_p05_norm': 65.0, 'db_p50_norm': 70.0, 'db_p95_norm': 76.0,
             'sps_p95_norm': 5.0,
         }
+    globals()['STATS_STEP1'] = STATS_STEP1
+
 
     y1 = np.array(y1, dtype=str)
 
