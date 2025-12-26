@@ -1107,12 +1107,8 @@ def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
             
             if len(clean_p) > 0:
                 mean_f0 = np.mean(clean_p)
-                # Range는 max-min 대신 퍼센타일 기반(p95-p5)로 계산해 무성/이상치 영향 완화
-                if len(clean_p) >= 10:
-                    p5, p95 = np.percentile(clean_p, [5, 95])
-                else:
-                    p5, p95 = float(np.min(clean_p)), float(np.max(clean_p))
-                rng = float(max(0.0, p95 - p5))
+                # Range(음도 범위)는 '최대 음도 - 최소 음도'로 계산 (이상치 제거(clean_p) 이후)
+                rng = float(max(0.0, np.max(clean_p) - np.min(clean_p)))
             else:
                 mean_f0, rng = 0, 0
                 clean_p, clean_t = [], []
