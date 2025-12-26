@@ -504,28 +504,44 @@ def _compute_f0z_stats(df: pd.DataFrame):
     return {"male": male_stats, "female": female_stats, "global": global_stats}
 
 def _f0_to_z(f0_value, sex_num):
-    """F0(Hz)를 성별 기반 z-score로 변환."""
+    """Convert mean F0 (Hz) into a z-score.
+
+    Priority:
+      1) Use training-derived stats stored in STATS_STEP1 (preferred; keeps train/predict consistent).
+      2) Fallback to simple sex-based heuristics (only if STATS_STEP1 stats are unavailable).
+    """
     try:
         f0 = float(f0_value)
     except Exception:
         return np.nan
-    stats = F0Z_STATS or {"male": (120.0, 25.0), "female": (210.0, 35.0), "global": (170.0, 50.0)}
-    if sex_num is None:
-        mu, sd = stats["global"]
+
+    # Prefer training-derived (global) stats to avoid mismatch when training data lacks sex labels.
+    try:
+        mu = float(STATS_STEP1.get("f0_mu", np.nan))
+        sd = float(STATS_STEP1.get("f0_sd", np.nan))
+        if np.isfinite(mu) and np.isfinite(sd) and sd > 1e-6:
+            return (f0 - mu) / sd
+    except Exception:
+        pass
+
+    # Fallback heuristic stats (used only when STATS_STEP1 doesn't have f0 stats)
+    F0Z_STATS = {
+        "male": {"mu": 120.0, "sd": 25.0},
+        "female": {"mu": 210.0, "sd": 30.0},
+        "global": {"mu": 165.0, "sd": 35.0},
+    }
+
+    sx = sex_to_num(sex_num)
+    if sx >= 0.75:
+        mu, sd = F0Z_STATS["male"]["mu"], F0Z_STATS["male"]["sd"]
+    elif sx <= 0.25:
+        mu, sd = F0Z_STATS["female"]["mu"], F0Z_STATS["female"]["sd"]
     else:
-        try:
-            sx = float(sex_num)
-        except Exception:
-            sx = 0.5
-        if sx >= 0.75:
-            mu, sd = stats["male"]
-        elif sx <= 0.25:
-            mu, sd = stats["female"]
-        else:
-            mu, sd = stats["global"]
-    if sd <= 1e-6:
-        sd = 1.0
-    return (f0 - mu) / sd
+        mu, sd = F0Z_STATS["global"]["mu"], F0Z_STATS["global"]["sd"]
+
+    z = (f0 - float(mu)) / max(float(sd), 1e-6)
+    return float(z)
+
 
 
 # ==========================================
