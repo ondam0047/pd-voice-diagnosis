@@ -42,6 +42,9 @@ from sklearn.pipeline import Pipeline
 def step1_screening_band(p_pd: float, pd_cut: float = 0.50):
     """
     Step1(정상 vs PD) 스크리닝 확률(p_pd)에 따라 안내 문구/톤을 조절합니다.
+
+    - cut-off(분류 기준)는 pd_cut(기본 0.50)를 사용합니다.
+    - 안내 밴드는 0.2 단위(0.8/0.6/0.4/0.2)로, Normal 확률(1-p_pd) 기준으로 해석합니다.
     Return: (kind, headline, band_code)
       - kind: 'success'|'warning'|'error' (Streamlit 배너 색상)
       - headline: 사용자 안내 문구(스크리닝/추정 표현)
@@ -51,27 +54,25 @@ def step1_screening_band(p_pd: float, pd_cut: float = 0.50):
         p_pd = float(p_pd)
     except Exception:
         p_pd = 0.0
+    # 방어
+    if not np.isfinite(p_pd):
+        p_pd = 0.0
+    p_pd = max(0.0, min(1.0, p_pd))
+    p_norm = 1.0 - p_pd
 
-    # 확률 구간(서비스/임상용 추천)
-    if p_pd <= 0.10:
-        return ("success", "정상 범위로 판단됩니다(정상 가능성이 매우 높음).", "normal_very_high")
-    if p_pd < 0.30:
-        return ("success", "정상 범위일 가능성이 높습니다.", "normal_high")
-
-    # 0.30~0.40: 정상 쪽이 우세한 경계(혼재)로 보되, 과도한 경고를 피하기 위해 '정상 우세'로 안내
-    if p_pd < 0.40:
-        return ("success", "정상 가능성이 더 높습니다(일부 지표가 PD 학습군과 겹칠 수 있어 경계로 분류).", "border_mixed_normal_lean")
-
-    # 0.40~0.45: 컷오프에 가까운 정상-우세 경계 구간(재측정/추적 권장)
-    if p_pd < 0.45:
-        return ("warning", "정상 가능성이 더 높지만 일부 지표가 PD 학습군과 겹칠 수 있습니다(경계).", "border_mixed_normal_lean2")
-    if p_pd < 0.55:
-        return ("warning", f"컷오프({pd_cut:.2f}) 근처의 경계 구간입니다(추가 평가/재측정 권장).", "border_cutoff")
-    if p_pd < 0.70:
-        return ("warning", "파킨슨병 관련 음성 특징이 관찰될 가능성이 있습니다.", "pd_possible")
-    if p_pd < 0.90:
-        return ("error", "파킨슨병 관련 음성 특징이 뚜렷할 가능성이 높습니다.", "pd_high")
-    return ("error", "파킨슨병 관련 음성 특징이 매우 강하게 관찰됩니다.", "pd_very_high")
+    # 0.2 단위 밴드 (Normal 확률 기준)
+    if p_norm >= 0.8:
+        # 0.9 이상이면 더 강한 표현을 덧붙임(밴드는 유지)
+        if p_norm >= 0.9:
+            return ("success", "정상 가능성이 매우 높습니다.", "normal_very_high")
+        return ("success", "정상에 매우 가깝습니다.", "normal_high")
+    if p_norm >= 0.6:
+        return ("success", "정상 가능성이 높습니다.", "normal_mid")
+    if p_norm >= 0.4:
+        return ("warning", f"경계 구간입니다(컷오프 {pd_cut:.2f} 기준). 재측정/추가 평가를 권장합니다.", "border")
+    if p_norm >= 0.2:
+        return ("warning", "파킨슨 가능성이 있습니다(임상 소견과 함께 해석).", "pd_possible")
+    return ("error", "파킨슨 가능성이 높습니다(추가 평가 권장).", "pd_high")
 
 
 
@@ -651,9 +652,9 @@ def compute_cutoffs_from_training(_file_mtime=None):
         oof_pd[te[0]] = float(proba[pd_idx]) if pd_idx >= 0 else float(proba[-1])
 
     y1_bin = (y1 == 'Parkinson').astype(int)
-    step1_cutoff, step1_sens, step1_spec = _youden_cutoff(y1_bin, oof_pd)
-    # (안정성 우선) 과도한 오탐을 막기 위해 cut-off 하한을 둡니다.
-    step1_cutoff = float(max(step1_cutoff, 0.60))
+    step1_cutoff_auto, step1_sens, step1_spec = _youden_cutoff(y1_bin, oof_pd)
+    # Step1 분류 기준은 임상 운용 안정성을 위해 0.50으로 고정합니다.
+    step1_cutoff = 0.50
 
     # ---------- Step2: PD 내부 3집단 cut-off (클래스별 OVR, LOO OOF) ----------
     df_pd = df[df["Diagnosis"] == "Parkinson"].copy()
@@ -1368,16 +1369,8 @@ if st.session_state.get('is_analyzed'):
             # 성별 feature
             sex_num_ui = sex_to_num(subject_gender)
 
-            # Step1: PD 확률 cut-off (training_data 기반)
-            pd_cut = 0.5
-            if CUTS and isinstance(CUTS, dict) and "step1_cutoff" in CUTS and CUTS["step1_cutoff"] is not None:
-                pd_cut = float(CUTS["step1_cutoff"])
-
-            # cut-off 하한(임상 안정성): 과도한 오탐 방지
-            try:
-                pd_cut = max(float(pd_cut), 0.60)
-            except Exception:
-                pd_cut = 0.60
+            # Step1: PD 확률 cut-off (운용 기준)
+            pd_cut = 0.50  # 고정
 
             # 기본값(저장용)
             p_pd = 0.0
