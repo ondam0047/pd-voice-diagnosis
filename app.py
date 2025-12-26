@@ -1294,14 +1294,18 @@ if st.session_state.get('is_analyzed'):
         # 모델 입력용: Range(Hz) 정규화(Range/F0)로 성별/평균F0 스케일 영향을 완화
         _f0_for_norm = float(st.session_state.get('f0_mean', 0) or 0)
         range_norm_ui = float(range_adj) / max(_f0_for_norm, 1e-6)
-        s_time, e_time = st.slider("말속도 구간(초)", 0.0, st.session_state['duration'], (0.0, st.session_state['duration']), 0.01)
+        s_time, e_time = st.slider("말속도 구간(초)", 0.0, st.session_state['duration'],
+                               st.session_state.get('sps_window', (0.0, st.session_state['duration'])),
+                               0.01, key="sps_window_slider")
+        st.session_state['sps_window'] = (float(s_time), float(e_time))
+        st.caption("※ 말속도 구간을 바꾸면 SPS(표)는 즉시 바뀝니다. 최종 확률/문구는 [🚀 진단 결과 확인]을 다시 눌러 갱신하세요.")
         sel_dur = max(0.1, e_time - s_time)
         final_sps = st.session_state.user_syllables / sel_dur
-        
+        st.session_state['sps_final'] = float(final_sps)
         st.write("#### 📊 음향학적 분석 결과")
         result_df = pd.DataFrame({
             "항목": ["평균 강도(dB)", "평균 음도(Hz)", "음도 범위(Hz)", "말속도(SPS)"],
-            "수치": [f"{final_db:.2f}", f"{st.session_state['f0_mean']:.2f}", f"{range_adj:.2f}", f"{final_sps:.2f}"]
+            "수치": [f"{final_db:.2f}", f"{st.session_state['f0_mean']:.2f}", f"{range_adj:.2f}", f"{st.session_state.get('sps_final', final_sps):.2f}"]
         })
         st.dataframe(result_df, hide_index=True)
 
@@ -1386,7 +1390,7 @@ if st.session_state.get('is_analyzed'):
                 f0_in = _safe_float(st.session_state.get('f0_mean'))
                 pr_in = _safe_float(locals().get('range_adj', st.session_state.get('pitch_range')))
                 db_in = _safe_float(final_db)
-                sps_in = _safe_float(final_sps)
+                sps_in = _safe_float(st.session_state.get('sps_final', final_sps))
 
                 # Range(음도범위)는 정상 발화에서도 과제/무성구간/추정 실패로 작게 나올 수 있어
                 # '정상 정황이 강한 경우'에는 학습데이터 중앙값으로 대체하여 오탐을 줄입니다.
