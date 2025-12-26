@@ -214,6 +214,62 @@ def explain_step1_by_training(stats, x_dict, topk=3):
     return reasons_n[:topk], reasons_pd_strict[:topk], reasons_pd_closest[:topk]
 
 # --- 공통 유틸: 숫자 안전 변환 ---
+
+def _adjust_display_probs_override(probs_map, target_label, base_label=None, order=None, eps=0.002):
+    """Return adjusted probability array for display so that target_label becomes the highest (by a tiny margin).
+    - probs_map: dict label->prob (should sum ~1 but we normalize safely)
+    - base_label: label to beat (usually model top1)
+    - order: list of labels for output ordering
+    """
+    try:
+        labels = list(order) if order is not None else list(probs_map.keys())
+        # sanitize
+        p = {k: float(probs_map.get(k, 0.0) or 0.0) for k in labels}
+        s = sum(max(v, 0.0) for v in p.values())
+        if s <= 0:
+            # fallback uniform
+            return np.array([1.0/len(labels)]*len(labels), dtype=float)
+        # normalize
+        p = {k: max(v, 0.0)/s for k, v in p.items()}
+        if target_label not in p:
+            return np.array([p.get(k, 0.0) for k in labels], dtype=float)
+
+        # Determine competitor to beat
+        if base_label is None or base_label not in p:
+            # beat current max other than target
+            others = [k for k in labels if k != target_label]
+            base_label = max(others, key=lambda k: p.get(k, 0.0)) if others else None
+
+        if base_label is None:
+            return np.array([p.get(k, 0.0) for k in labels], dtype=float)
+
+        target_new = max(p[target_label], p.get(base_label, 0.0) + float(eps))
+        target_new = min(target_new, 0.999)  # keep room for others
+        remaining = 1.0 - target_new
+
+        others = [k for k in labels if k != target_label]
+        other_sum = sum(p.get(k, 0.0) for k in others)
+        if other_sum <= 0:
+            # distribute evenly
+            for k in others:
+                p[k] = remaining / max(len(others), 1)
+        else:
+            for k in others:
+                p[k] = remaining * (p.get(k, 0.0) / other_sum)
+        p[target_label] = target_new
+
+        # final normalize (numerical)
+        s2 = sum(p.get(k, 0.0) for k in labels)
+        if s2 > 0:
+            for k in labels:
+                p[k] = p.get(k, 0.0) / s2
+        return np.array([p.get(k, 0.0) for k in labels], dtype=float)
+    except Exception:
+        # safe fallback: no adjustment
+        labels = list(order) if order is not None else list(probs_map.keys())
+        return np.array([float(probs_map.get(k, 0.0) or 0.0) for k in labels], dtype=float)
+
+
 def _safe_float(x, default=None):
     """Convert to float safely. Returns `default` on failure or missing/NaN."""
     try:
@@ -1605,6 +1661,7 @@ if st.session_state.get('is_analyzed'):
                         display_prob = pred_prob
                         labels_plot = list(sub_classes)
                         probs_plot = np.array(probs_sub, dtype=float)
+                        probs_plot_raw = probs_plot.copy()
                         contrib_target = pred_sub
                         
                         if hybrid_overrode_rate_to_artic and ("조음 집단" in probs_map):
@@ -1616,6 +1673,19 @@ if st.session_state.get('is_analyzed'):
                             desired_order = ["조음 집단", "말속도 집단", "강도 집단"]
                             labels_plot = [x for x in desired_order if x in sub_classes] + [x for x in sub_classes if x not in desired_order]
                             probs_plot = np.array([float(probs_map.get(x, 0.0)) for x in labels_plot], dtype=float)
+                            probs_plot_raw = probs_plot.copy()
+                            # 임상 우선 표기(display_sub)가 모델 Top1과 다를 때, 레이더/표시 확률은 display_sub가 최상위가 되도록 미세 조정
+                            try:
+                                if (display_sub in labels_plot) and (pred_sub in labels_plot) and (display_sub != pred_sub):
+                                    probs_plot = _adjust_display_probs_override(
+                                        {lab: float(probs_map.get(lab, 0.0)) for lab in sub_classes},
+                                        target_label=display_sub,
+                                        base_label=pred_sub,
+                                        order=labels_plot,
+                                        eps=0.002,
+                                    )
+                            except Exception:
+                                probs_plot = probs_plot_raw
                         
                         # ---- Spider/Radar chart: PD 하위집단 확률 시각화 (원래 UI 복원) ----
                         try:
@@ -1646,8 +1716,9 @@ if st.session_state.get('is_analyzed'):
                                 with st.expander("📊 하위집단 확률(상세)", expanded=False):
                                     dfp = pd.DataFrame({
                                         "집단": labels,
-                                        "확률(%)": (np.array(probs_plot) * 100).round(1)
-                                    }).sort_values("확률(%)", ascending=False)
+                                        "표시 확률(%)": (np.array(probs_plot) * 100).round(1),
+                                        "모델 확률(%)": (np.array(probs_plot_raw) * 100).round(1) if "probs_plot_raw" in locals() else (np.array(probs_plot) * 100).round(1),
+                                    }).sort_values("표시 확률(%)", ascending=False)
                                     
                                     # --- [설명 보강] 하위집단 분류에 기여한 상위 변수 TOP-3 ---
                                     try:
