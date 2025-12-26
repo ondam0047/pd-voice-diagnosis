@@ -886,18 +886,40 @@ def train_models(cache_buster: str = "v28_3_2"):
     # "정상 케이스 + 다른 지표 양호" 조건에서 중립값으로 대체하는 가드에 사용합니다.
     try:
         X1_arr = np.array(X1_rows, dtype=float)
+        y1_arr = np.array(y1, dtype=str)
         _range_all = X1_arr[:, 1]
+        _db_all = X1_arr[:, 2]
+        _sps_all = X1_arr[:, 3]
         _sex_all = X1_arr[:, 4]
+        _is_norm = (y1_arr == 'Normal')
+        # Range medians (sex-stratified) used for '오탐 방지' 가드
         median_range_all = float(np.nanmedian(_range_all))
         median_range_m = float(np.nanmedian(_range_all[_sex_all == 0])) if np.any(_sex_all == 0) else median_range_all
         median_range_f = float(np.nanmedian(_range_all[_sex_all == 1])) if np.any(_sex_all == 1) else median_range_all
+        # Intensity/SPS quantiles from NORMAL only (device/env mismatch 방어용 winsorization)
+        if np.any(_is_norm):
+            _db_norm = _db_all[_is_norm]
+            _sps_norm = _sps_all[_is_norm]
+            db_p05, db_p50, db_p95 = [float(np.nanpercentile(_db_norm, q)) for q in (5, 50, 95)]
+            sps_p95 = float(np.nanpercentile(_sps_norm, 95))
+        else:
+            db_p05, db_p50, db_p95 = 65.0, 70.0, 76.0
+            sps_p95 = 5.0
         globals()['STATS_STEP1'] = {
-            "median_range_all": median_range_all,
-            "median_range_m": median_range_m,
-            "median_range_f": median_range_f,
+            'median_range_all': median_range_all,
+            'median_range_m': median_range_m,
+            'median_range_f': median_range_f,
+            'db_p05_norm': db_p05,
+            'db_p50_norm': db_p50,
+            'db_p95_norm': db_p95,
+            'sps_p95_norm': sps_p95,
         }
     except Exception:
-        globals()['STATS_STEP1'] = {"median_range_all": 100.0, "median_range_m": 90.0, "median_range_f": 120.0}
+        globals()['STATS_STEP1'] = {
+            'median_range_all': 100.0, 'median_range_m': 90.0, 'median_range_f': 120.0,
+            'db_p05_norm': 65.0, 'db_p50_norm': 70.0, 'db_p95_norm': 76.0,
+            'sps_p95_norm': 5.0,
+        }
 
     y1 = np.array(y1, dtype=str)
 
@@ -911,7 +933,7 @@ def train_models(cache_buster: str = "v28_3_2"):
         ("sc", StandardScaler()),
         ("clf", LogisticRegression(max_iter=4000, class_weight="balanced"))
     ])
-    model_step1.fit(X1, y1)
+    model_step1.fit(X1[:, :4], y1)  # NOTE: exclude sex column from model features
 
     # ---------- Step2 (PD only) ----------
     X2_rows, y2 = [], []
@@ -1414,6 +1436,22 @@ if st.session_state.get('is_analyzed'):
 
                 # 정상 정황: VHI 낮음 + 청지각 조음 양호 + 강도/말속도 극단 아님
                 normal_context = (vhi_now <= 3.0) and (artic_now >= 70.0) and (db_in is not None and db_in >= 65.0) and (sps_in is not None and sps_in <= 5.8)
+                db_used = db_in
+                sps_used = sps_in
+                clamp_msgs = []
+                if isinstance(STATS_STEP1, dict):
+                    db_p05 = float(STATS_STEP1.get("db_p05_norm", 65.0))
+                    sps_p95 = float(STATS_STEP1.get("sps_p95_norm", 5.0))
+                    if normal_context and (db_in is not None) and (db_in < db_p05):
+                        db_used = db_p05
+                        clamp_msgs.append(f"평균 음성 강도(dB)가 정상 학습분포 하한(5퍼센타일≈{db_p05:.1f}dB)보다 낮아, 장비/환경 영향 가능성이 있어 모델 입력은 {db_used:.1f}dB로 보정했습니다. (오탐 방지)")
+                    # SPS는 장비 영향은 적지만, 정상 화자 중 빠른 말하기가 학습데이터에 부족하면 위양성이 늘 수 있어 완만히 방어합니다.
+                    if normal_context and (sps_in is not None) and (sps_in > sps_p95) and (sps_in <= 5.6):
+                        sps_used = sps_p95
+                        clamp_msgs.append(f"말속도(SPS)가 정상 학습분포 상한(95퍼센타일≈{sps_p95:.2f})을 약간 초과해, 모델 입력은 {sps_used:.2f}로 완만히 보정했습니다. (오탐 방지)")
+                if clamp_msgs:
+                    for _m in clamp_msgs:
+                        st.info(_m)
 
                 if normal_context and pr_used is not None:
                     # 성별별 중앙값 사용(없으면 전체 중앙값)
@@ -1441,7 +1479,7 @@ if st.session_state.get('is_analyzed'):
                 f0_z_in = _f0_to_z(f0_in, sex_num_ui)
 
                 input_1 = pd.DataFrame([[
-                    f0_z_in, pr_used, db_in, sps_in
+                    f0_z_in, pr_used, db_used, sps_used
                 ]], columns=FEATS_STEP1)
 
                 proba_1 = model_step1.predict_proba(input_1.to_numpy())[0]
@@ -1541,15 +1579,32 @@ if st.session_state.get('is_analyzed'):
                         else:
                             st.info("ℹ️ 임상 참고: PD 하위집단(강도/말속도/조음)은 **PD 데이터로만 학습**된 추정 결과입니다. 정상 케이스에서는 참고용으로만 해석하세요.")
                         
+                        # --- (표시용) 하위집단 최종 표기 라벨/확률/레이더 순서 조정 ---
+                        display_sub = pred_sub
+                        display_prob = pred_prob
+                        labels_plot = list(sub_classes)
+                        probs_plot = np.array(probs_sub, dtype=float)
+                        contrib_target = pred_sub
+                        
+                        if hybrid_overrode_rate_to_artic and ("조음 집단" in probs_map):
+                            display_sub = "조음 집단"
+                            display_prob = float(probs_map.get("조음 집단", pred_prob))
+                            contrib_target = display_sub
+                            # 기록/전송용 결론도 '조음 우선 혼합형'으로 표기(모델 확률은 아래에 병기됨)
+                            final_decision = "혼합형(조음 우선)"
+                            desired_order = ["조음 집단", "말속도 집단", "강도 집단"]
+                            labels_plot = [x for x in desired_order if x in sub_classes] + [x for x in sub_classes if x not in desired_order]
+                            probs_plot = np.array([float(probs_map.get(x, 0.0)) for x in labels_plot], dtype=float)
+                        
                         # ---- Spider/Radar chart: PD 하위집단 확률 시각화 (원래 UI 복원) ----
                         try:
-                            labels = sub_classes
-                            labels_with_probs = [f"{label}\n({prob*100:.1f}%)" for label, prob in zip(labels, probs_sub)]
+                            labels = labels_plot
+                            labels_with_probs = [f"{label}\n({prob*100:.1f}%)" for label, prob in zip(labels, probs_plot)]
                             fig_radar = plt.figure(figsize=(3, 3))
                             ax = fig_radar.add_subplot(111, polar=True)
                             angles = np.linspace(0, 2 * np.pi, len(labels), endpoint=False).tolist()
                             angles += angles[:1]
-                            stats = probs_sub.tolist() + [probs_sub[0]]
+                            stats = probs_plot.tolist() + [probs_plot[0]]
                             ax.plot(angles, stats, linewidth=2, linestyle='solid', color='red')
                             ax.fill(angles, stats, 'red', alpha=0.25)
                             ax.set_xticks(angles[:-1])
@@ -1560,9 +1615,9 @@ if st.session_state.get('is_analyzed'):
                                 st.pyplot(fig_radar)
 
                             with c_desc:
-                                if "강도" in pred_sub:
+                                if "강도" in display_sub:
                                     st.info("💡 특징: 목소리 크기가 작고 약합니다. (Hypophonia)")
-                                elif "말속도" in pred_sub:
+                                elif "말속도" in display_sub:
                                     st.info("💡 특징: 말이 빠르거나 리듬이 불규칙할 수 있습니다. (Rate/Rhythm)")
                                 else:
                                     st.info("💡 특징: 발음이 뭉개지고 정확도가 떨어질 수 있습니다. (Articulation)")
@@ -1570,13 +1625,13 @@ if st.session_state.get('is_analyzed'):
                                 with st.expander("📊 하위집단 확률(상세)", expanded=False):
                                     dfp = pd.DataFrame({
                                         "집단": labels,
-                                        "확률(%)": (np.array(probs_sub) * 100).round(1)
+                                        "확률(%)": (np.array(probs_plot) * 100).round(1)
                                     }).sort_values("확률(%)", ascending=False)
                                     
                                     # --- [설명 보강] 하위집단 분류에 기여한 상위 변수 TOP-3 ---
                                     try:
                                         x2_row = [final_db, final_sps, p_loud, p_rate, p_artic]
-                                        contrib2 = top_contrib_linear_multiclass(model_step2, x2_row, FEATS_STEP2, pred_sub, topk=3)
+                                        contrib2 = top_contrib_linear_multiclass(model_step2, x2_row, FEATS_STEP2, contrib_target, topk=3)
                                         if contrib2:
                                             st.markdown("**🔎 이 하위집단 판정에 크게 기여한 요소(Top 3)**")
                                             for r in contrib2:
