@@ -300,10 +300,9 @@ st.set_page_config(page_title="파킨슨병 환자 하위유형 분류 프로그
 # ==========================================
 
 FEAT_LABELS_STEP1 = {
-    "F0_Z": "평균 음도(성별 정규화)",
-    "Range": "음도 범위(Hz)",
+    "F0": "평균 음도(Hz)",
     "Intensity": "평균 음성 강도(dB)",
-    "SPS": "말속도(SPS)"
+    "SPS": "말속도(SPS)",
 }
 
 
@@ -428,7 +427,7 @@ except:
 # ==========================================
 # [전역 설정] 폰트 및 변수
 # ==========================================
-FEATS_STEP1 = ['F0_Z', 'Range', 'Intensity', 'SPS']  # Step1: Sex 제외, F0는 성별-정규화(z) 사용  # Step1: Range는 성별/평균F0 영향을 받으므로 Range/F0 정규화 사용  # Step1 판정에는 VHI를 포함하지 않고(참고 지표로만 사용)
+FEATS_STEP1 = ["F0", "Intensity", "SPS"]  # Step1: Normal vs PD (range/성별은 참고용으로만 사용)
 # Step2는 PD 하위집단 표본이 작아(특히 말속도 집단) 고차원 특성에 불안정합니다.
 # 임상적으로 구분력이 큰 핵심 변수(강도/말속도/조음)만 사용합니다.
 FEATS_STEP2 = ['Intensity', 'SPS', 'P_Loudness', 'P_Rate', 'P_Artic']
@@ -1406,9 +1405,7 @@ if st.session_state.get('is_analyzed'):
 
         final_db = st.session_state['mean_db'] + db_adj
         range_adj = st.slider("음도범위(Hz) 보정", 0.0, 300.0, float(st.session_state['pitch_range']))
-        # 모델 입력용: Range(Hz) 정규화(Range/F0)로 성별/평균F0 스케일 영향을 완화
-        _f0_for_norm = float(st.session_state.get('f0_mean', 0) or 0)
-        range_norm_ui = float(range_adj) / max(_f0_for_norm, 1e-6)
+        # ※ 음도범위(Range)는 화면 표시/해석용 참고값이며 Step1 확률 계산에는 사용하지 않습니다(오탐 방지).
         s_time, e_time = st.slider("말속도 구간(초)", 0.0, st.session_state['duration'],
                                st.session_state.get('sps_window', (0.0, st.session_state['duration'])),
                                0.01, key="sps_window_slider")
@@ -1569,11 +1566,10 @@ if st.session_state.get('is_analyzed'):
                 except Exception:
                     pass
 
-                f0_z_in = _f0_to_z(f0_in, sex_num_ui)
 
-                input_1 = pd.DataFrame([[
-                    f0_z_in, pr_used, db_used, sps_used
-                ]], columns=FEATS_STEP1)
+                # Step1 모델 입력(학습과 동일): F0, Intensity, SPS
+                input_1 = pd.DataFrame([[f0_in, db_used, sps_used]], columns=FEATS_STEP1)
+
 
                 proba_1 = model_step1.predict_proba(input_1.to_numpy())[0]
                 classes_1 = list(model_step1.classes_)
@@ -1702,6 +1698,21 @@ if st.session_state.get('is_analyzed'):
                             s_disp = float(sum(probs_display_map.values())) if sum(probs_display_map.values()) else 1.0
                         for k in list(probs_display_map.keys()):
                             probs_display_map[k] = float(probs_display_map.get(k, 0.0)) / s_disp
+
+                        # --- 표시 일관성 보정 ---
+                        # 하이브리드 규칙으로 선택된 display_sub가 있을 때, 스파이더 차트/표시 확률에서도
+                        # 선택된 집단이 가장 크게 보이도록(혹은 동률 이상) 소폭 보정합니다.
+                        if display_sub in probs_display_map and len(probs_display_map) >= 2:
+                            sel = probs_display_map.get(display_sub, 0.0)
+                            others = [v for k, v in probs_display_map.items() if k != display_sub]
+                            max_other = max(others) if others else 0.0
+                            if sel + 1e-9 < max_other:
+                                probs_display_map[display_sub] = max_other + 1e-3
+                                s2 = sum(probs_display_map.values())
+                                if s2 > 0:
+                                    for k in probs_display_map:
+                                        probs_display_map[k] = probs_display_map[k] / s2
+
 
                         display_prob = float(probs_display_map.get(display_sub, pred_prob))
 
