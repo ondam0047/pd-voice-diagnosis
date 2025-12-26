@@ -1753,7 +1753,7 @@ if st.session_state.get('is_analyzed'):
             # --- 자동 설명(모델 기여도): 실패해도 이유가 비지 않도록 ---
             f0_z_mean = _f0_to_z(st.session_state.get('f0_mean'), sex_num_ui)
             range_for_model = st.session_state.get('step1_range_used', st.session_state.get('pitch_range'))
-            pos_auto, neg_auto = top_contrib_linear_binary(model_step1, x1_row, FEATS_STEP1, pos_label="Parkinson", topk=3)
+            pos_auto, neg_auto = top_contrib_linear_binary(model_step1, input_1.iloc[0].to_numpy(), FEATS_STEP1, pos_label="Parkinson", topk=3)
             # 말속도(SPS)는 cut-off 근처에서만 'PD 가능성 근거'로 강조 (오버콜 방지)
             try:
                 near_cutoff = abs(float(p_pd) - float(cutoff_1)) <= 0.08
@@ -1763,7 +1763,7 @@ if st.session_state.get('is_analyzed'):
                 pos_auto = [s for s in (pos_auto or []) if "말속도" not in str(s)]
                 neg_auto = [s for s in (neg_auto or []) if "말속도" not in str(s)]
             try:
-                pos_auto, neg_auto = top_contrib_linear_binary(model_step1, x1_row, FEATS_STEP1, pos_label="Parkinson", topk=3)
+                pos_auto, neg_auto = top_contrib_linear_binary(model_step1, input_1.iloc[0].to_numpy(), FEATS_STEP1, pos_label="Parkinson", topk=3)
                 # 정상 확률 설명이 비면(또는 너무 짧으면) 자동 설명을 섞어줌
                 if not positives or len(positives) < 1:
                     positives = (positives or []) + (neg_auto[:3] if neg_auto else [])
