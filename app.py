@@ -14,6 +14,150 @@ import io
 # --- Step1 학습 통계(가드/해석용) ---
 STATS_STEP1 = {}
 
+# --- 내장 training_data (파일이 없을 때 fallback) ---
+TRAINING_DATA_CSV_EMBED = r'''
+환자ID,성별,F0,Range,강도(dB),SPS,음도(청지각),음도범위(청지각),강도(청지각),말속도(청지각),조음정확도(청지각),VHI총점,VHI_신체,VHI_기능,VHI_정서,진단결과 (Label)
+PD1,여,193.6,137.78,56.57,4.56,52.78,48.89,36.33,66.22,59.67,58,20,16,22,PD_Intensity
+PD2,남,202.21,148.07,61.03,2.38,56,51.56,67.89,36.56,51.56,58,19,19,20,PD_Rate
+PD3,여,174.1,61.33,54.05,4.08,33.44,34.22,10.22,50.11,66.89,27,15,7,5,PD_Intensity
+PD4,남,141.27,134.37,61,3.75,46,51.89,61.44,51.78,40.78,67,21,23,23,PD_Articulation
+PD5,여,155.74,106.17,51.07,3.23,35.67,35,23,41.78,37.78,56,18,18,20,PD_Intensity
+PD6,남,179.69,151.93,67.91,3.97,53,63.33,69.89,55.44,26.44,58,23,19,16,PD_Articulation
+PD7,여,126.97,69.55,51.78,3.26,22.78,17,12.78,40.78,20.33,116,36,40,40,PD_Intensity
+PD8,여,169.32,105.57,56.26,4.42,46.89,47.78,34.78,50.56,61.11,68,23,22,23,PD_Intensity
+PD9,남,114.93,54.89,55.03,4.58,24.56,18.11,19.44,66.44,23.78,37,14,13,10,PD_Rate
+PD10,남,122.54,78.4,58.81,3.36,33.89,37.89,31.78,39.56,60.56,36,16,10,10,PD_Intensity
+PD11,남,113.83,92.63,59.85,3.93,43.56,33.11,63.22,58.67,45.11,55,23,19,13,PD_Articulation
+PD12,남,124.23,88.15,57.35,3.26,43.56,53.56,49.89,47.56,60.56,66,23,24,19,PD_Articulation
+PD13,남,138.56,102.52,63.63,7.03,48.22,34.67,60.22,92.33,37.11,96,24,35,37,PD_Rate
+PD14,여,198.33,68.22,50.58,3.97,29.44,13,6.78,40.44,24.89,87,27,30,30,PD_Intensity
+PD15,남,131.23,91.37,58.75,3.55,52.67,56.33,58.11,68.33,71.89,33,15,11,7,PD_Intensity
+PD16,여,189.72,111.82,62.57,2.64,55,35.44,61.44,59,61.56,57,21,18,18,PD_Intensity
+PD17,여,165.65,139.99,51.45,3.78,61.56,63.11,46.44,58.67,77.67,30,9,11,10,PD_Articulation
+PD18,여,154.43,103.33,52.59,3.59,41.33,35.78,27.67,52.11,49.67,60,20,20,20,PD_Intensity
+PD19,남,154.52,112.58,60.23,2.97,36,40,22,55,19,86,26,29,31,PD_Articulation
+PD20,여,198.38,120.44,60.32,4.85,52.78,48.89,36.33,66.22,59.67,58,20,16,22,PD_Intensity
+PD21,남,162.44,90.93,60.31,2.61,56,51.56,67.89,36.56,51.56,58,19,19,20,PD_Rate
+PD22,여,163.2,61.33,58.7,4.6,33.44,34.22,10.22,50.11,66.89,27,15,7,5,PD_Intensity
+PD23,남,149.97,127.12,64.11,3.48,46,51.89,61.44,51.78,40.78,67,21,23,23,PD_Articulation
+PD24,여,145.68,73.18,57.33,3.26,35.67,35,23,41.78,37.78,56,18,18,20,PD_Intensity
+PD25,남,182.61,128.94,70.04,3.62,53,63.33,69.89,55.44,26.44,58,23,19,16,PD_Articulation
+PD26,여,130.67,103.77,56.67,4.04,22.78,17,12.78,40.78,20.33,116,36,40,40,PD_Intensity
+PD27,여,165.23,108.26,58.28,3.99,46.89,47.78,34.78,50.56,61.11,68,23,22,23,PD_Intensity
+PD28,남,109.27,39.44,61.98,6.73,24.56,18.11,19.44,66.44,23.78,37,14,13,10,PD_Rate
+PD29,남,119.13,70.8,60.43,3.43,33.89,37.89,31.78,39.56,60.56,36,16,10,10,PD_Intensity
+PD30,남,109.61,61.91,63.79,4.14,43.56,33.11,63.22,58.67,45.11,55,23,19,13,PD_Articulation
+PD31,남,123.98,90.91,62.98,3.69,43.56,53.56,49.89,47.56,60.56,66,23,24,19,PD_Articulation
+PD32,남,131.23,71.17,64.67,7.36,48.22,34.67,60.22,92.33,37.11,96,24,35,37,PD_Rate
+PD33,여,192.23,75.1,53.2,3.79,29.44,13,6.78,40.44,24.89,87,27,30,30,PD_Intensity
+PD34,남,131.25,86.03,66.02,4.71,52.67,56.33,58.11,68.33,71.89,33,15,11,7,PD_Intensity
+PD35,여,176.26,94.82,68.39,3.75,55,35.44,61.44,59,61.56,57,21,18,18,PD_Intensity
+PD36,여,180.87,130.98,62.97,4.06,61.56,63.11,46.44,58.67,77.67,30,9,11,10,PD_Articulation
+PD37,여,151.7,115.13,60.82,4.3,41.33,35.78,27.67,52.11,49.67,60,20,20,20,PD_Intensity
+PD38,남,157,91.94,67.62,3.46,36,40,22,55,19,86,26,29,31,PD_Articulation
+CG39,여,171.58,165.25,70.75,3.69,,,,,,0,0,0,0,normal
+CG40,여,210.07,130.17,72.84,4.03,,,,,,19,9,8,2,normal
+CG41,여,185.79,121.22,71.17,4.07,,,,,,0,0,0,0,normal
+CG42,여,212.86,204.65,73.57,4.02,,,,,,3,2,1,0,normal
+CG43,남,119.32,122.65,71.66,4.17,,,,,,4,1,3,0,normal
+CG44,여,163.08,99.27,70.24,4.13,,,,,,8,3,1,4,normal
+CG45,여,199.02,154.42,68.27,3.69,,,,,,3,2,1,0,normal
+CG46,여,205.24,147.31,70.24,3.53,,,,,,1,0,1,0,normal
+CG47,여,203.18,122.49,64.6,3.54,,,,,,20,8,8,4,normal
+CG48,남,91.15,69.69,69.06,3.11,,,,,,0,0,0,0,normal
+CG49,여,173.58,167.27,64.58,3.1,,,,,,42,17,11,14,normal
+CG50,여,208.25,158.35,72.85,3.96,,,,,,48,18,14,16,normal
+CG51,여,163.14,175.14,66.31,3.55,,,,,,2,2,0,0,normal
+CG52,여,201.2,159.19,61.21,3.86,,,,,,4,1,2,1,normal
+CG53,여,176.88,190.2,70.4,4.56,,,,,,16,4,7,5,normal
+CG54,여,188.55,165.02,69.34,4.34,,,,,,5,5,0,0,normal
+CG55,여,183.81,175.35,69.69,4.4,,,,,,0,0,0,0,normal
+CG56,여,180.75,89.77,67.21,4.16,,,,,,0,0,0,0,normal
+CG57,남,163.93,164.48,71.88,3.27,,,,,,0,0,0,0,normal
+CG58,여,170.43,188.24,66.12,2.84,,,,,,9,3,4,2,normal
+CG59,남,151.7,95.19,68.1,3.71,,,,,,0,0,0,0,normal
+CG60,남,137.66,110.73,72.72,3.24,,,,,,3,3,0,0,normal
+CG61,남,160.12,128.14,67.32,3.93,,,,,,0,0,0,0,normal
+CG62,남,165.97,96.16,77.38,3.74,,,,,,38,16,12,10,normal
+CG63,남,147.64,153.77,65.49,3.31,,,,,,0,0,0,0,normal
+CG64,여,188.73,188.42,67.28,3.95,,,,,,4,4,0,0,normal
+CG65,여,201.86,123.81,68.07,4.64,,,,,,0,0,0,0,normal
+CG66,여,185.54,170.03,67.43,3.62,,,,,,0,0,0,0,normal
+CG67,여,186.14,141.1,75.65,4.44,,,,,,7,4,1,2,normal
+CG68,여,204.5,201.14,72.86,4.84,,,,,,13,5,7,1,normal
+CG69,여,208.76,130.92,71.97,4.56,,,,,,0,0,0,0,normal
+CG70,여,201.53,175.22,70.19,4.35,,,,,,1,0,1,0,normal
+CG71,여,199.68,172.65,70.25,4.6,,,,,,11,4,3,4,normal
+CG72,여,211.44,178.91,68.08,3.19,,,,,,10,6,4,0,normal
+CG73,여,176.56,155.94,69.94,4.22,,,,,,18,7,10,1,normal
+CG74,여,165.93,129.68,70.8,4.1,,,,,,11,9,1,1,normal
+CG75,여,196.82,125.85,71.96,3.39,,,,,,32,8,14,10,normal
+CG76,여,189.85,155.54,73.97,3.91,,,,,,0,0,0,0,normal
+CG77,여,203.51,186.16,76.39,4.53,,,,,,4,1,1,2,normal
+CG78,남,120.86,53.35,74.76,4.52,,,,,,0,0,0,0,normal
+CG79,여,168.65,119.56,72.79,3.71,,,,,,19,9,8,2,normal
+CG80,여,195.34,150.3,72.54,3.92,,,,,,0,0,0,0,normal
+CG81,여,197.36,137.15,73.28,3.94,,,,,,3,2,1,0,normal
+CG82,여,193.88,98.7,70.33,4,,,,,,4,1,3,0,normal
+CG83,남,90.96,104.96,70.64,3.33,,,,,,8,3,1,4,normal
+CG84,여,174.02,208.07,67.66,3.25,,,,,,3,2,1,0,normal
+CG85,여,204.82,154.52,74.01,3.77,,,,,,1,0,1,0,normal
+CG86,여,156.21,128.4,67.43,3.78,,,,,,20,8,8,4,normal
+CG87,여,206.71,146.91,72.09,4.09,,,,,,0,0,0,0,normal
+CG88,여,179.08,167.22,73,4.94,,,,,,42,17,11,14,normal
+CG89,여,181.04,140.7,73.73,4.84,,,,,,48,18,14,16,normal
+CG90,여,189.67,96.71,69.72,4.74,,,,,,2,2,0,0,normal
+CG91,여,171.85,98.7,67.57,4.55,,,,,,4,1,2,1,normal
+CG92,남,157.46,110.24,77.39,3.56,,,,,,16,4,7,5,normal
+CG93,여,164.11,156.69,65.95,3.15,,,,,,5,5,0,0,normal
+CG94,남,154.23,87.83,72.37,3.94,,,,,,0,0,0,0,normal
+CG95,남,145.97,161.93,76.84,2.81,,,,,,0,0,0,0,normal
+CG96,남,145.77,149.27,77.06,2.84,,,,,,0,0,0,0,normal
+CG97,남,169.1,102.17,77.89,3.41,,,,,,9,3,4,2,normal
+CG98,남,156.71,115.34,69.84,3.67,,,,,,0,0,0,0,normal
+CG99,여,184.34,146.43,71.85,3.93,,,,,,3,3,0,0,normal
+CG100,여,194.48,171.42,70.99,5.24,,,,,,0,0,0,0,normal
+CG101,여,182.02,146.87,68.54,3.77,,,,,,38,16,12,10,normal
+CG102,여,188.47,161.43,79.46,4.04,,,,,,0,0,0,0,normal
+CG103,여,200.9,163.51,75.4,5.01,,,,,,4,4,0,0,normal
+CG104,여,210.52,146.35,73.74,4.81,,,,,,0,0,0,0,normal
+CG105,여,196.33,148.44,73.27,4.84,,,,,,0,0,0,0,normal
+CG106,여,189.94,176.84,71.27,4.64,,,,,,7,4,1,2,normal
+CG107,여,209.17,138.84,71.95,4.38,,,,,,13,5,7,1,normal
+CG108,여,175.13,155.11,74.85,4.21,,,,,,0,0,0,0,normal
+PD109,여,169.96 ,135.41 ,62.90 ,5.06 ,57.32 ,53.53 ,56.67 ,53.53 ,44.16 ,,,,,PD_Articulation
+PD110,여,168.89 ,152.24 ,63.27 ,5.48 ,57.32 ,53.53 ,56.67 ,53.53 ,44.16 ,,,,,PD_Articulation
+PD111,남,142.43 ,226.98 ,67.98 ,7.14 ,45.95 ,30.95 ,32.95 ,32.21 ,44.05 ,,,,,PD_Intensity
+PD112,남,146.16 ,101.26 ,65.43 ,6.02 ,45.95 ,30.95 ,32.95 ,32.21 ,44.05 ,,,,,PD_Intensity
+PD113,여,175.23 ,77.24 ,66.63 ,6.26 ,71.53 ,54.79 ,53.58 ,55.58 ,69.32 ,,,,,PD_Intensity
+PD114,여,175.50 ,120.20 ,67.79 ,6.41 ,71.53 ,54.79 ,53.58 ,55.58 ,69.32 ,,,,,PD_Intensity
+PD115,여,204.71 ,83.37 ,64.48 ,5.77 ,59.26 ,42.79 ,36.32 ,36.37 ,57.79 ,,,,,PD_Intensity
+PD116,여,190.87 ,179.51 ,65.61 ,6.09 ,59.26 ,42.79 ,36.32 ,36.37 ,57.79 ,,,,,PD_Intensity
+PD117,여,190.82 ,143.23 ,64.53 ,5.39 ,49.32 ,59.68 ,44.79 ,44.00 ,34.89 ,,,,,PD_Articulation
+PD118,여,188.24 ,140.01 ,65.92 ,6.50 ,49.32 ,59.68 ,44.79 ,44.00 ,34.89 ,,,,,PD_Articulation
+PD119,여,176.89 ,90.17 ,66.16 ,6.13 ,56.57 ,44.86 ,39.05 ,42.38 ,59.00 ,,,,,PD_Intensity
+PD120,여,145.08 ,159.49 ,60.63 ,6.10 ,56.57 ,44.86 ,39.05 ,42.38 ,59.00 ,,,,,PD_Intensity
+PD121,여,210.02 ,161.37 ,67.76 ,6.74 ,73.53 ,63.74 ,49.79 ,46.84 ,71.68 ,,,,,PD_Intensity
+PD122,여,196.67 ,137.42 ,68.11 ,7.41 ,73.53 ,63.74 ,49.79 ,46.84 ,71.68 ,,,,,PD_Intensity
+PD123,남,134.28 ,95.15 ,58.43 ,6.52 ,17.79 ,19.63 ,23.84 ,27.89 ,33.95 ,,,,,PD_Intensity
+PD124,남,138.02 ,122.81 ,66.99 ,7.44 ,17.79 ,19.63 ,23.84 ,27.89 ,33.95 ,,,,,PD_Intensity
+PD125,남,149.04 ,71.62 ,73.14 ,5.12 ,27.89 ,29.68 ,34.00 ,35.11 ,27.37 ,,,,,PD_Articulation
+PD126,남,152.58 ,143.66 ,68.24 ,5.74 ,27.89 ,29.68 ,34.00 ,35.11 ,27.37 ,,,,,PD_Articulation
+PD127,여,204.92 ,137.26 ,71.94 ,6.68 ,68.42 ,57.63 ,46.89 ,55.68 ,73.74 ,,,,,PD_Intensity
+PD128,여,197.40 ,129.48 ,68.14 ,6.60 ,68.42 ,57.63 ,46.89 ,55.68 ,73.74 ,,,,,PD_Intensity
+PD129,남,84.70 ,50.42 ,60.63 ,7.37 ,35.50 ,36.00 ,31.65 ,58.15 ,47.25 ,,,,,PD_Intensity
+PD130,남,93.21 ,98.55 ,60.95 ,7.69 ,35.50 ,36.00 ,31.65 ,58.15 ,47.25 ,,,,,PD_Intensity
+PD131,남,116.92 ,35.87 ,63.20 ,8.91 ,61.15 ,60.30 ,52.50 ,44.70 ,75.30 ,,,,,PD_Intensity
+PD132,남,120.86 ,33.92 ,71.56 ,7.91 ,61.15 ,60.30 ,52.50 ,44.70 ,75.30 ,,,,,PD_Intensity
+PD133,남,98.25 ,47.43 ,64.76 ,8.04 ,24.50 ,31.75 ,29.35 ,56.20 ,61.45 ,,,,,PD_Intensity
+PD134,남,95.59 ,131.21 ,64.84 ,8.56 ,24.50 ,31.75 ,29.35 ,56.20 ,61.45 ,,,,,PD_Intensity
+PD135,남,144.64 ,64.81 ,61.22 ,8.58 ,19.50 ,25.27 ,18.68 ,46.45 ,35.73 ,,,,,PD_Intensity
+PD136,남,146.31 ,75.63 ,62.34 ,9.82 ,19.50 ,25.27 ,18.68 ,46.45 ,35.73 ,,,,,PD_Intensity
+PD137,여,191.70 ,108.76 ,64.84 ,5.29 ,7.95 ,8.40 ,10.05 ,34.80 ,7.00 ,,,,,PD_Articulation
+PD138,여,199.23 ,176.08 ,66.23 ,5.81 ,7.95 ,8.40 ,10.05 ,34.80 ,7.00 ,,,,,PD_Articulation
+'''
+
+
 # --- 구글 시트 & 이메일 라이브러리 ---
 from google.oauth2 import service_account
 import gspread
@@ -300,11 +444,10 @@ st.set_page_config(page_title="파킨슨병 환자 하위유형 분류 프로그
 # ==========================================
 
 FEAT_LABELS_STEP1 = {
-    "F0": "평균 음도(Hz)",
+    "F0_Z": "평균 음도(F0, 성별 표준화 z)",
     "Intensity": "평균 음성 강도(dB)",
     "SPS": "말속도(SPS)",
 }
-
 
 FEAT_LABELS_STEP2 = {
     "Intensity": "평균 음성 강도(dB)",
@@ -427,7 +570,7 @@ except:
 # ==========================================
 # [전역 설정] 폰트 및 변수
 # ==========================================
-FEATS_STEP1 = ["F0", "Intensity", "SPS"]  # Step1: Normal vs PD (range/성별은 참고용으로만 사용)
+FEATS_STEP1 = ["F0_Z", "Intensity", "SPS"]  # Step1: Normal vs PD (F0는 성별 기준 z-score; range/성별은 참고용)
 # Step2는 PD 하위집단 표본이 작아(특히 말속도 집단) 고차원 특성에 불안정합니다.
 # 임상적으로 구분력이 큰 핵심 변수(강도/말속도/조음)만 사용합니다.
 FEATS_STEP2 = ['Intensity', 'SPS', 'P_Loudness', 'P_Rate', 'P_Artic']
@@ -506,40 +649,44 @@ def _f0_to_z(f0_value, sex_num):
     """Convert mean F0 (Hz) into a z-score.
 
     Priority:
-      1) Use training-derived stats stored in STATS_STEP1 (preferred; keeps train/predict consistent).
-      2) Fallback to simple sex-based heuristics (only if STATS_STEP1 stats are unavailable).
+      1) Use training-derived stats stored in STATS_STEP1 (sex-stratified).
+      2) Fallback to simple sex-based heuristics if stats are missing.
     """
     try:
         f0 = float(f0_value)
     except Exception:
         return np.nan
 
-    # Prefer training-derived (global) stats to avoid mismatch when training data lacks sex labels.
+    # Prefer training-derived stats (sex-stratified) from STATS_STEP1
     try:
-        mu = float(STATS_STEP1.get("f0_mu", np.nan))
-        sd = float(STATS_STEP1.get("f0_sd", np.nan))
+        sx = sex_to_num(sex_num)
+        if sx >= 0.75:
+            mu = float(STATS_STEP1.get("f0_mu_m", np.nan))
+            sd = float(STATS_STEP1.get("f0_sd_m", np.nan))
+        elif sx <= 0.25:
+            mu = float(STATS_STEP1.get("f0_mu_f", np.nan))
+            sd = float(STATS_STEP1.get("f0_sd_f", np.nan))
+        else:
+            mu = float(STATS_STEP1.get("f0_mu_all", np.nan))
+            sd = float(STATS_STEP1.get("f0_sd_all", np.nan))
+
         if np.isfinite(mu) and np.isfinite(sd) and sd > 1e-6:
             return (f0 - mu) / sd
     except Exception:
         pass
 
-    # Fallback heuristic stats (used only when STATS_STEP1 doesn't have f0 stats)
-    F0Z_STATS = {
-        "male": {"mu": 120.0, "sd": 25.0},
-        "female": {"mu": 210.0, "sd": 30.0},
-        "global": {"mu": 165.0, "sd": 35.0},
-    }
-
-    sx = sex_to_num(sex_num)
-    if sx >= 0.75:
-        mu, sd = F0Z_STATS["male"]["mu"], F0Z_STATS["male"]["sd"]
-    elif sx <= 0.25:
-        mu, sd = F0Z_STATS["female"]["mu"], F0Z_STATS["female"]["sd"]
-    else:
-        mu, sd = F0Z_STATS["global"]["mu"], F0Z_STATS["global"]["sd"]
-
-    z = (f0 - float(mu)) / max(float(sd), 1e-6)
-    return float(z)
+    # Fallback: rough heuristics
+    try:
+        sx = sex_to_num(sex_num)
+        if sx >= 0.75:  # male
+            mu, sd = 120.0, 25.0
+        elif sx <= 0.25:  # female
+            mu, sd = 210.0, 30.0
+        else:
+            mu, sd = 165.0, 35.0
+        return (f0 - mu) / sd
+    except Exception:
+        return np.nan
 
 
 
@@ -881,20 +1028,20 @@ setup_korean_font()
 # ==========================================
 
 @st.cache_resource
-def train_models(cache_buster: str = "v28_3_2"):
+def train_models(cache_buster: str = "v28_7_0"):
     """training_data로 Step1/Step2 모델을 학습합니다."""
     global MODEL_LOAD_ERROR
 
     training_path = get_training_file()
-    if training_path is None:
-        MODEL_LOAD_ERROR = "training_data.csv/xlsx 파일을 찾지 못했습니다."
-        return None, None
 
     try:
-        if str(training_path).lower().endswith(".xlsx"):
+        if training_path is not None and str(training_path).lower().endswith(".xlsx"):
             raw = pd.read_excel(training_path)
-        else:
+        elif training_path is not None:
             raw = pd.read_csv(training_path, encoding="utf-8-sig")
+        else:
+            # 파일이 없으면 내장 CSV로 fallback (통짜 파일 운용용)
+            raw = pd.read_csv(io.StringIO(TRAINING_DATA_CSV_EMBED), encoding='utf-8-sig')
     except Exception as e:
         MODEL_LOAD_ERROR = f"training_data 로드 실패: {type(e).__name__}: {e}"
         return None, None
@@ -926,6 +1073,8 @@ def train_models(cache_buster: str = "v28_3_2"):
     # ---------- Step1 ----------
     X1_rows, y1 = [], []
     sex_list = []  # Step1 통계(성별 중앙값 등) 계산용
+    range_list = []  # Step1 range 통계(가드용)
+    f0_raw_list = []  # Step1 F0(Hz) 통계(성별 z-score 산출용)
     for _, row in raw.iterrows():
         diag, _sub = _label_to_diag_and_sub(row.get('진단결과 (Label)', ''))
         if diag is None:
@@ -945,14 +1094,14 @@ def train_models(cache_buster: str = "v28_3_2"):
             vhi_total = vhi_f + vhi_p + vhi_e
 
         sex_num = sex_to_num(row.get('성별', None))
-        f0_z = _f0_to_z(row.get('F0', np.nan), sex_num)
+        f0_raw = row.get('F0', np.nan)
+        range_val = row.get('Range', np.nan)
+        f0_z = _f0_to_z(f0_raw, sex_num)
 
-        X1_rows.append([
-            f0_z,
-            row.get('Range', np.nan),
-            row.get('강도(dB)', np.nan),
-            row.get('SPS', np.nan)
-        ])
+        # Step1 학습 입력: [F0_Z, Intensity(dB), SPS]
+        X1_rows.append([f0_z, row.get('강도(dB)', np.nan), row.get('SPS', np.nan)])
+        range_list.append(range_val)
+        f0_raw_list.append(f0_raw)
         y1.append(diag)
 
     X1 = np.array(X1_rows, dtype=float)
@@ -965,28 +1114,30 @@ def train_models(cache_buster: str = "v28_3_2"):
     #   NORMAL 분포의 퍼센타일을 이용해 완만한 보정(클램프)에 사용합니다.
     global STATS_STEP1
     try:
-        X1_arr = np.array(X1_rows, dtype=float)  # [f0_z, range, db, sps]
+        # X1_arr: [F0_Z, Intensity(dB), SPS]
+        X1_arr = np.array(X1_rows, dtype=float)
         y1_arr = np.array(y1, dtype=str)
         sex_arr = np.array(sex_list, dtype=float)
+        range_arr = np.array(range_list, dtype=float)
+        f0_raw_arr = np.array([pd.to_numeric(x, errors="coerce") for x in f0_raw_list], dtype=float)
 
-        _range_all = X1_arr[:, 1]
-        _db_all = X1_arr[:, 2]
-        _sps_all = X1_arr[:, 3]
-        _is_norm = (y1_arr == 'Normal')
+        _db_all = X1_arr[:, 1] if X1_arr.ndim == 2 and X1_arr.shape[1] >= 2 else np.array([])
+        _sps_all = X1_arr[:, 2] if X1_arr.ndim == 2 and X1_arr.shape[1] >= 3 else np.array([])
+        _is_norm = (y1_arr == "Normal")
 
-        # Range medians (sex-stratified) used for '오탐 방지' 가드
-        median_range_all = float(np.nanmedian(_range_all)) if np.any(np.isfinite(_range_all)) else 100.0
-        if np.any(sex_arr == 0):
-            median_range_m = float(np.nanmedian(_range_all[sex_arr == 0]))
+        # Range medians (sex-stratified) used for '오탐 방지' 가드 (range는 모델 입력에서 제외)
+        median_range_all = float(np.nanmedian(range_arr)) if np.any(np.isfinite(range_arr)) else 100.0
+        if np.any((sex_arr == 1) & np.isfinite(range_arr)):
+            median_range_m = float(np.nanmedian(range_arr[(sex_arr == 1)]))
         else:
             median_range_m = median_range_all
-        if np.any(sex_arr == 1):
-            median_range_f = float(np.nanmedian(_range_all[sex_arr == 1]))
+        if np.any((sex_arr == 0) & np.isfinite(range_arr)):
+            median_range_f = float(np.nanmedian(range_arr[(sex_arr == 0)]))
         else:
             median_range_f = median_range_all
 
         # Intensity/SPS quantiles from NORMAL only
-        if np.any(_is_norm):
+        if np.any(_is_norm) and _db_all.size and _sps_all.size:
             _db_norm = _db_all[_is_norm]
             _sps_norm = _sps_all[_is_norm]
             db_p05, db_p50, db_p95 = [float(np.nanpercentile(_db_norm, q)) for q in (5, 50, 95)]
@@ -995,22 +1146,56 @@ def train_models(cache_buster: str = "v28_3_2"):
             db_p05, db_p50, db_p95 = 65.0, 70.0, 76.0
             sps_p95 = 5.0
 
+        # F0(Hz) stats from NORMAL only (sex-stratified) for z-score
+        if np.any(_is_norm):
+            f0_norm = f0_raw_arr[_is_norm]
+            sex_norm = sex_arr[_is_norm]
+            f0_mu_all = float(np.nanmean(f0_norm)) if np.any(np.isfinite(f0_norm)) else 165.0
+            f0_sd_all = float(np.nanstd(f0_norm, ddof=1)) if np.sum(np.isfinite(f0_norm)) >= 2 else 35.0
+
+            f0_norm_m = f0_norm[sex_norm == 1]
+            f0_norm_f = f0_norm[sex_norm == 0]
+            f0_mu_m = float(np.nanmean(f0_norm_m)) if np.any(np.isfinite(f0_norm_m)) else 120.0
+            f0_sd_m = float(np.nanstd(f0_norm_m, ddof=1)) if np.sum(np.isfinite(f0_norm_m)) >= 2 else 25.0
+            f0_mu_f = float(np.nanmean(f0_norm_f)) if np.any(np.isfinite(f0_norm_f)) else 210.0
+            f0_sd_f = float(np.nanstd(f0_norm_f, ddof=1)) if np.sum(np.isfinite(f0_norm_f)) >= 2 else 30.0
+        else:
+            f0_mu_all, f0_sd_all = 165.0, 35.0
+            f0_mu_m, f0_sd_m = 120.0, 25.0
+            f0_mu_f, f0_sd_f = 210.0, 30.0
+
         STATS_STEP1 = {
-            'median_range_all': median_range_all,
-            'median_range_m': median_range_m,
-            'median_range_f': median_range_f,
-            'db_p05_norm': db_p05,
-            'db_p50_norm': db_p50,
-            'db_p95_norm': db_p95,
-            'sps_p95_norm': sps_p95,
+            "median_range_all": median_range_all,
+            "median_range_m": median_range_m,
+            "median_range_f": median_range_f,
+            "db_p05_norm": db_p05,
+            "db_p50_norm": db_p50,
+            "db_p95_norm": db_p95,
+            "sps_p95_norm": sps_p95,
+            "f0_mu_all": f0_mu_all,
+            "f0_sd_all": f0_sd_all,
+            "f0_mu_m": f0_mu_m,
+            "f0_sd_m": f0_sd_m,
+            "f0_mu_f": f0_mu_f,
+            "f0_sd_f": f0_sd_f,
         }
     except Exception:
         STATS_STEP1 = {
-            'median_range_all': 100.0, 'median_range_m': 90.0, 'median_range_f': 120.0,
-            'db_p05_norm': 65.0, 'db_p50_norm': 70.0, 'db_p95_norm': 76.0,
-            'sps_p95_norm': 5.0,
+            "median_range_all": 100.0,
+            "median_range_m": 90.0,
+            "median_range_f": 120.0,
+            "db_p05_norm": 65.0,
+            "db_p50_norm": 70.0,
+            "db_p95_norm": 76.0,
+            "sps_p95_norm": 5.0,
+            "f0_mu_all": 165.0,
+            "f0_sd_all": 35.0,
+            "f0_mu_m": 120.0,
+            "f0_sd_m": 25.0,
+            "f0_mu_f": 210.0,
+            "f0_sd_f": 30.0,
         }
-    globals()['STATS_STEP1'] = STATS_STEP1
+    globals()["STATS_STEP1"] = STATS_STEP1
 
 
     y1 = np.array(y1, dtype=str)
@@ -1059,7 +1244,7 @@ def train_models(cache_buster: str = "v28_3_2"):
 
 
 try:
-    model_step1, model_step2 = train_models("v28_3_2")
+    model_step1, model_step2 = train_models("v28_7_0")
 except Exception as e:
     MODEL_LOAD_ERROR = f"모델 학습 중 예외: {type(e).__name__}: {e}"
     model_step1, model_step2 = None, None
@@ -1304,7 +1489,7 @@ with st.sidebar:
     st.header("👤 대상자 정보 (필수)")
     subject_name = st.text_input("이름 (실명/ID)", "참여자")
     subject_age = st.number_input("나이", 1, 120, 60)
-    subject_gender = st.selectbox("성별", ["M", "F"])
+    subject_gender = st.selectbox("성별", ["남", "여"])
 
 # 2. 데이터 수집
 st.header("1. 음성 데이터 수집")
@@ -1567,8 +1752,10 @@ if st.session_state.get('is_analyzed'):
                     pass
 
 
-                # Step1 모델 입력(학습과 동일): F0, Intensity, SPS
-                input_1 = pd.DataFrame([[f0_in, db_used, sps_used]], columns=FEATS_STEP1)
+                # Step1 모델 입력(학습과 동일): [F0_Z, Intensity(dB), SPS]
+                sex_num_ui = sex_to_num(subject_gender)
+                f0_z_in = _f0_to_z(f0_in, sex_num_ui)
+                input_1 = pd.DataFrame([[f0_z_in, db_used, sps_used]], columns=FEATS_STEP1)
 
 
                 proba_1 = model_step1.predict_proba(input_1.to_numpy())[0]
@@ -1585,7 +1772,7 @@ if st.session_state.get('is_analyzed'):
                 # (임상 안정성) 남성에서 음도 범위가 선천적으로 좁을 수 있어,
                 # 컷오프 근처에서는 Range 단독 신호가 과대 반영되지 않도록 p_pd를 아주 소폭 완화합니다.
                 try:
-                    if (subject_gender == "M") and (range_adj < 90) and (p_pd < (pd_cut + 0.07)):
+                    if (subject_gender == "남") and (range_adj < 90) and (p_pd < (pd_cut + 0.07)):
                         p_pd = max(0.0, p_pd - 0.07)
                         prob_normal = (1.0 - p_pd) * 100.0
                 except Exception:
