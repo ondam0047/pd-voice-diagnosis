@@ -1186,6 +1186,10 @@ def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e, 
         negatives.append(f"음도 범위가 {range_val:.1f}Hz로 좁게 측정되었습니다. 억양 변화가 단조롭게 나타나는 패턴은 PD 학습군과 겹칠 수 있으나, 과제(짧은 문장/단음절)나 Pitch 추정 불안정에서도 발생할 수 있어 재측정이 권장됩니다.")
     if artic >= 75:
         positives.append(f"청지각적 조음 정확도가 {artic}점으로 양호하여, 상대방이 말을 알아듣기에 명료한 상태입니다.")
+    elif artic >= 50:
+        positives.append(f"청지각적 조음 정확도가 {artic}점으로 중간 수준입니다. 과제 난이도/녹음 환경/평가자 기준에 따라 점수 변동이 있을 수 있어, 필요 시 재평가로 확인하는 것이 좋습니다.")
+    else:
+        negatives.append(f"청지각적 조음 정확도가 {artic}점으로 낮습니다. 발음 명료도가 떨어지는 경향이 있어 조음·말운동 문제 가능성을 포함해 추가 확인을 권장합니다.")
     if sps < 5.8:
         positives.append(f"말속도가 {sps:.2f} SPS로 측정되었습니다. 말속도는 안정적인 범위입니다.")
     if db >= 60:
@@ -1195,8 +1199,6 @@ def generate_interpretation(prob_normal, db, sps, range_val, artic, vhi, vhi_e, 
         negatives.append(f"평균 음성 강도가 {db:.1f} dB로 낮게 측정되었습니다(※ 마이크/거리/환경에 따라 절대값은 달라질 수 있으며, 본 도구의 모델 기준으로 낮은 편입니다). 이는 파킨슨병에서 흔한 강도 감소(Hypophonia) 패턴과 유사하여 발성 훈련이 필요할 수 있습니다.")
     if sps >= 5.8:
         negatives.append(f"말속도가 {sps:.2f} SPS로 빠른 편입니다. 정상 성인에서도 빠른 말속도는 나타날 수 있으나, 일부 PD 학습군의 말속도/리듬 특징과 겹칠 수 있어 추가 확인이 필요합니다.")
-    if artic < 70:
-        negatives.append(f"청지각적 조음 정확도가 {artic}점으로 다소 낮습니다. 발음이 불분명해지는 조음 장애(Dysarthria) 징후가 관찰됩니다.")
     if vhi >= 20:
         negatives.append(f"VHI 총점이 {vhi}점으로 높습니다. 환자 스스로 음성 문제로 인한 생활의 불편함과 심리적 위축을 크게 느끼고 있습니다.")
     if vhi_e >= 5:
@@ -1573,7 +1575,7 @@ if st.session_state.get('is_analyzed'):
                         title="🕸️ PD 하위집단 확률(스파이더 차트)",
                         polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
                         showlegend=False,
-                        height=360,
+                        height=420,
                         margin=dict(l=20, r=20, t=60, b=20)
                     )
                     st.plotly_chart(fig_sub, use_container_width=True)
@@ -1634,12 +1636,6 @@ if st.session_state.get('is_analyzed'):
                         st.plotly_chart(fig_sub, use_container_width=True)
                     except Exception:
                         pass
-
-                    if pairs:
-                        st.caption("참고 하위집단 확률(상위 2개)")
-                        st.write(f"- {pairs[0][0]}: {pairs[0][1]*100:.1f}%")
-                        if len(pairs) > 1:
-                            st.write(f"- {pairs[1][0]}: {pairs[1][1]*100:.1f}%")
                 except Exception:
                     pass
 
