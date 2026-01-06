@@ -1176,38 +1176,72 @@ with col_rec:
 
     # --- 🗣️ Step4 낭독 문단 선택 (SPS 계산용) ---
     def _count_korean_syllables(s: str) -> int:
-        return len(re.findall(r"[가-힣]", s))
+        return len(re.findall(r"[가-힣]", s or ""))
+
+    def _split_sentences(text: str):
+        # 마침표/물음표/느낌표/줄바꿈 기준으로 문장 분리 (콤마는 유지)
+        parts = re.split(r"(?<=[\.!\?。！？])\s+|\n+", (text or "").strip())
+        return [p.strip() for p in parts if p.strip()]
 
     PARAGRAPHS = {
-        "산책": "높은 산에 올라가 맑은 공기를 마시며 소리를 지르면 가슴이 활짝 열리는 듯하다. 바닷가에 나가 조개를 주으며 넓게 펼쳐있는 바다를 바라보면 내 마음 역시 넓어지는 것 같다.",
-        "바닷가의 추억": "바닷가에 파도가 칩니다. 무지개 아래 바둑이가 뜁니다. 보트가 지나가고 버터구이를 먹습니다. 포토카드를 부탁해서 돋보기로 봅니다. 시장에서 빈대떡을 사 먹었습니다.",
-        "조음 정밀 문단": """바닷가 부둣가 바닥에 비둘기 바둑이 본다, 다시 걷는다.
-달·딸·탈, 바·빠·파, 가·까·카를 같은 박자로 끊지 말고 잇는다.
-사과를 싸서 씻고, 조심히 찾아 차분히 웃는다.
-노란 물 멀리 두고 말로 마무리하며 느리게 내려놓는다.""",
+        "산책": "높은 산에 올라가 맑은 공기를 마시며 소리를 지르면 가슴이 활짝 열립니다.",
+        "바닷가의 추억": "바닷가에 파도가 칩니다. 하얀 모래사장에 발자국이 남습니다. 멀리 갈매기가 날아갑니다.",
+        "조음 정밀 문단": "바닷가 부둣가 바닥에 비둘기 바둑이 본다, 다시 걷는다.\n달·딸·탈, 바·빠·파, 가·까·카를 같은 박자로 끊지 말고 잇는다.\n사과를 싸서 씻고, 조심히 찾아 차분히 웃는다.\n노란 물 멀리 두고 말로 마무리하며 느리게 내려놓는다."
     }
     para_counts = {k: _count_korean_syllables(v) for k, v in PARAGRAPHS.items()}
 
-    options = [f'{k} ({para_counts[k]}음절)' for k in PARAGRAPHS.keys()] + ["직접 입력"]
-    choice = st.radio("🗣️ Step4 낭독 문단 선택 (SPS 계산용)", options=options, horizontal=False)
+    col_p1, col_p2 = st.columns([3, 1])
+    with col_p2:
+        font_size = st.slider("📏 글자 크기", min_value=14, max_value=28, value=18, step=1)
+        st.markdown(
+            f"""
+            <style>
+            /* 낭독 문단 입력창(텍스트에어리어) 폰트 크기 */
+            div[data-testid="stTextArea"] textarea {{
+                font-size: {font_size}px !important;
+                line-height: 1.6 !important;
+            }}
+            </style>
+            """,
+            unsafe_allow_html=True
+        )
 
-    if choice == "직접 입력":
-        read_text = st.text_area("낭독할 문단", value=st.session_state.get("read_custom_text", ""), height=120, key="read_custom_text")
+    with col_p1:
+        # 선택 옵션에 기본 음절수를 함께 표기
+        labels = [f"{k} ({para_counts[k]}음절)" for k in PARAGRAPHS.keys()]
+        labels.append("직접 입력")
+
+        if "read_mode" not in st.session_state:
+            st.session_state.read_mode = labels[0]
+        choice = st.selectbox("📝 낭독 문단 선택", options=labels, index=labels.index(st.session_state.read_mode) if st.session_state.read_mode in labels else 0)
+
+        st.session_state.read_mode = choice
+
+        if choice == "직접 입력":
+            if "read_text_custom" not in st.session_state:
+                st.session_state.read_text_custom = ""
+            read_text = st.text_area("낭독 문단 (직접 입력)", key="read_text_custom", height=170)
+        else:
+            # "제목 (n음절)" -> 제목만 추출
+            selected_key = re.sub(r"\s*\(.*?\)\s*$", "", choice)
+            # 선택이 바뀌면 기본 문단으로 리셋, 그 외(글자 크기 변경 등)에는 사용자 수정 유지
+            if st.session_state.get("read_selected_key") != selected_key:
+                st.session_state.read_selected_key = selected_key
+                st.session_state.read_text_selected = PARAGRAPHS[selected_key]
+            read_text = st.text_area("낭독 문단 (수정 가능)", key="read_text_selected", height=170)
+
         syllables = _count_korean_syllables(read_text)
-    else:
-        name = choice.split(" (")[0]
-        read_text = PARAGRAPHS[name]
-        syllables = para_counts[name]
-        st.text_area("선택된 문단", value=read_text, height=120, disabled=True)
+        st.caption(f"총 음절수: **{syllables}음절**  ·  (문단 선택/수정 시 자동 반영)")
 
-    st.caption(f"총 음절수: {syllables} 음절")
-    # 문장별 음절수(선택 문단/직접 입력 모두)
-    sentences = _split_sentences(read_text)
-    if sentences:
-        with st.expander("📌 문장별 음절수", expanded=False):
-            for s in sentences:
-                st.write(f"- {s}  ({_count_korean_syllables(s)}음절)")
+        # 문장별 음절수(참고)
+        sentences = _split_sentences(read_text)
+        if len(sentences) > 1:
+            sent_counts = [_count_korean_syllables(s) for s in sentences]
+            with st.expander("문장별 음절수(참고)"):
+                for i, (s, c) in enumerate(zip(sentences, sent_counts), start=1):
+                    st.write(f"{i}. {c}음절 · {s}")
 
+    # SPS 계산에 사용되는 목표 음절수 업데이트
     st.session_state.user_syllables = max(int(syllables), 1)
 
     with st.expander("🔎 내용 확인"):
@@ -1275,7 +1309,6 @@ with col_rec:
         p_rate = st.slider("말속도", 0, 100, int(st.session_state.get("p_rate", 50)), key="p_rate")
     with cc2:
         st.markdown("#### 📝 VHI-10")
-        st.caption("0 전혀 그렇지 않다 · 1 거의 그렇지 않다 · 2 가끔 그렇다 · 3 자주 그렇다 · 4 항상 그렇다")
         st.caption("0: 전혀 그렇지 않다 · 1: 거의 그렇지 않다 · 2: 가끔 그렇다 · 3: 자주 그렇다 · 4: 항상 그렇다")
         vhi_opts = [0, 1, 2, 3, 4]
 
