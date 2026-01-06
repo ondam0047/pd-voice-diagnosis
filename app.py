@@ -1635,14 +1635,6 @@ if st.session_state.get('is_analyzed'):
                     except Exception:
                         pass
 
-                    if pairs:
-                        st.caption("참고 하위집단 확률(상위 2개)")
-                        st.write(f"- {pairs[0][0]}: {pairs[0][1]*100:.1f}%")
-                        if len(pairs) > 1:
-                            st.write(f"- {pairs[1][0]}: {pairs[1][1]*100:.1f}%")
-                except Exception:
-                    pass
-
             # 해석 문구
             sex_code = "M" if subject_gender == "남" else "F"
             pos, neg = generate_interpretation(
@@ -1716,3 +1708,4 @@ if st.session_state.get('is_analyzed'):
                 st.success(msg)
             else:
                 st.error(msg)
+
