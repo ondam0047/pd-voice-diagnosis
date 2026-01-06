@@ -10,8 +10,8 @@ import os
 import platform
 import datetime
 import io
-import re
 
+import re
 # --- Step1 학습 통계(가드/해석용) ---
 STATS_STEP1 = {}
 
@@ -173,6 +173,9 @@ import sqlite3
 import hashlib
 import json
 from pathlib import Path
+
+from scipy.signal import find_peaks
+
 from sklearn.linear_model import LogisticRegression
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.model_selection import LeaveOneOut
@@ -1092,6 +1095,77 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
 # ==========================================
 # [SMR 측정 함수]
 # ==========================================
+def auto_detect_smr_events(sound_path, top_n=20):
+    try:
+        sound = parselmouth.Sound(sound_path)
+        intensity = sound.to_intensity(time_step=0.005)
+        times = intensity.xs()
+        values = intensity.values[0, :]
+        inv_vals = -values
+        peaks, properties = find_peaks(inv_vals, prominence=5, distance=40)
+        candidates = []
+        for p_idx in peaks:
+            time_point = times[p_idx]
+            v_int = values[p_idx]
+            start_search = max(0, p_idx - 20)
+            end_search = min(len(values), p_idx + 20)
+            local_max = np.max(values[start_search:end_search])
+            depth = local_max - v_int
+            candidates.append({"time": time_point, "depth": depth})
+        candidates.sort(key=lambda x: x['time'])
+        return candidates, len(candidates)
+    except Exception:
+        return [], 0
+
+# ==========================================
+# [분석 로직] Median Ratio 필터로 확실한 옥타브 제거
+# ==========================================
+def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
+    try:
+        sound = parselmouth.Sound(sound_path)
+        pitch = call(sound, "To Pitch", 0.0, f0_min, f0_max)
+        pitch_array = pitch.selected_array['frequency']
+        pitch_values = np.array(pitch_array, dtype=np.float64)
+        duration = sound.get_total_duration()
+        n_points = len(pitch_values)
+        time_array = np.linspace(0, duration, n_points)
+
+        valid_indices = pitch_values != 0
+        valid_times = time_array[valid_indices]
+        valid_pitch = pitch_values[valid_indices]
+
+        if len(valid_pitch) > 0:
+            median_f0 = np.median(valid_pitch)
+            lower_bound = median_f0 * 0.6
+            upper_bound = median_f0 * 1.6
+
+            clean_mask = (valid_pitch >= lower_bound) & (valid_pitch <= upper_bound)
+            clean_p = valid_pitch[clean_mask]
+            clean_t = valid_times[clean_mask]
+
+            if len(clean_p) > 0:
+                mean_f0 = np.mean(clean_p)
+                rng = float(max(0.0, np.max(clean_p) - np.min(clean_p)))
+            else:
+                mean_f0, rng = 0, 0
+                clean_p, clean_t = [], []
+        else:
+            clean_p, clean_t = [], []
+            mean_f0, rng = 0, 0
+
+        fig = go.Figure()
+        if len(clean_p) > 0:
+            fig.add_trace(go.Scatter(x=clean_t, y=clean_p, mode='markers', marker=dict(size=4, color='red'), name='Pitch'))
+            y_min = max(0, np.min(clean_p) - 20)
+            y_max = np.max(clean_p) + 20
+            fig.update_layout(title="음도 컨투어 (이상치 제거됨)", xaxis_title="Time(s)", yaxis_title="Hz", height=300, yaxis=dict(range=[y_min, y_max]))
+        else:
+            fig.update_layout(title="음도 컨투어 (감지된 음성 없음)", height=300)
+
+        return fig, mean_f0, rng, duration
+    except Exception:
+        return None, 0, 0, 0
+
 def run_analysis_logic(file_path, gender=None):
     try:
         g = (gender or "").strip().upper()
@@ -1107,9 +1181,12 @@ def run_analysis_logic(file_path, gender=None):
         intensity = sound.to_intensity()
         mean_db = call(intensity, "Get mean", 0, 0, "energy")
         sps = st.session_state.user_syllables / dur if dur > 0 else 0
+        smr_events, smr_count = auto_detect_smr_events(file_path)
+
         st.session_state.update({
             'f0_mean': f0, 'pitch_range': rng, 'mean_db': mean_db,
             'sps': sps, 'duration': dur, 'fig_plotly': fig,
+            'smr_events': smr_events, 'smr_count': smr_count,
             'is_analyzed': True, 'is_saved': False
         })
         return True
@@ -1174,78 +1251,80 @@ with col_rec:
     st.markdown("#### 🎙️ 마이크 녹음")
     font_size = st.slider("🔍 글자 크기", 15, 50, 28, key="fs_read")
 
-    # --- 🗣️ Step4 낭독 문단 선택 (SPS 계산용) ---
-    def _count_korean_syllables(s: str) -> int:
-        return len(re.findall(r"[가-힣]", s or ""))
-
-    def _split_sentences(text: str):
-        # 마침표/물음표/느낌표/줄바꿈 기준으로 문장 분리 (콤마는 유지)
-        parts = re.split(r"(?<=[\.!\?。！？])\s+|\n+", (text or "").strip())
-        return [p.strip() for p in parts if p.strip()]
-
+    # (추가) 조음 정밀 평가용 문단 포함 + 자동 음절 수 갱신
     PARAGRAPHS = {
-        "산책": "높은 산에 올라가 맑은 공기를 마시며 소리를 지르면 가슴이 활짝 열립니다.",
-        "바닷가의 추억": "바닷가에 파도가 칩니다. 하얀 모래사장에 발자국이 남습니다. 멀리 갈매기가 날아갑니다.",
-        "조음 정밀 문단": "바닷가 부둣가 바닥에 비둘기 바둑이 본다, 다시 걷는다.\n달·딸·탈, 바·빠·파, 가·까·카를 같은 박자로 끊지 말고 잇는다.\n사과를 싸서 씻고, 조심히 찾아 차분히 웃는다.\n노란 물 멀리 두고 말로 마무리하며 느리게 내려놓는다."
+        "산책": '높은 산에 올라가 맑은 공기를 마시며 소리를 지르면 가슴이 활짝 열리는 듯하다. 바닷가에 나가 조개를 주으며 넓게 펼쳐있는 바다를 바라보면 내 마음 역시 넓어지는 것 같다.',
+        "바닷가의 추억": '바닷가에 파도가 칩니다. 무지개 아래 바둑이가 뜁니다. 보트가 지나가고 버터구이를 먹습니다. 포토카드를 부탁해서 돋보기로 봅니다. 시장에서 빈대떡을 사 먹었습니다.',
+        "조음정밀 문단": '바닷가 부둣가 바닥에 비둘기 바둑이 본다, 다시 걷는다. 달·딸·탈, 바·빠·파, 가·까·카를 같은 박자로 끊지 말고 잇는다. 사과를 싸서 씻고, 조심히 찾아 차분히 웃는다. 노란 물 멀리 두고 말로 마무리하며 느리게 내려놓는다.',
     }
-    para_counts = {k: _count_korean_syllables(v) for k, v in PARAGRAPHS.items()}
 
-    col_p1, col_p2 = st.columns([3, 1])
-    with col_p2:
-        font_size = st.slider("📏 글자 크기", min_value=14, max_value=28, value=18, step=1)
-        st.markdown(
-            f"""
-            <style>
-            /* 낭독 문단 입력창(텍스트에어리어) 폰트 크기 */
-            div[data-testid="stTextArea"] textarea {{
-                font-size: {font_size}px !important;
-                line-height: 1.6 !important;
-            }}
-            </style>
-            """,
-            unsafe_allow_html=True
-        )
+    def _count_korean_syllables(s: str) -> int:
+        return len(re.findall(r"[가-힣]", s))
 
-    with col_p1:
-        # 선택 옵션에 기본 음절수를 함께 표기
-        labels = [f"{k} ({para_counts[k]}음절)" for k in PARAGRAPHS.keys()]
-        labels.append("직접 입력")
+    _para_labels = [
+        f"1. 산책 (일반용 - {_count_korean_syllables(PARAGRAPHS['산책'])}음절)",
+        f"2. 바닷가의 추억 (SMR/정밀용 - {_count_korean_syllables(PARAGRAPHS['바닷가의 추억'])}음절)",
+        f"3. 조음정밀 문단 (조음/대조용 - {_count_korean_syllables(PARAGRAPHS['조음정밀 문단'])}음절)",
+    ]
+    read_opt = st.radio("📖 낭독 문단 선택", _para_labels)
 
-        if "read_mode" not in st.session_state:
-            st.session_state.read_mode = labels[0]
-        choice = st.selectbox("📝 낭독 문단 선택", options=labels, index=labels.index(st.session_state.read_mode) if st.session_state.read_mode in labels else 0)
+    def styled_text(text, size):
+        return f"""<div style="font-size: {size}px; line-height: 1.8; border: 1px solid #ddd; padding: 15px; background-color: #f9f9f9; color: #333;">{text}</div>"""
 
-        st.session_state.read_mode = choice
+    if read_opt.startswith("2."):
+        read_text = PARAGRAPHS["바닷가의 추억"]
+    elif read_opt.startswith("3."):
+        read_text = PARAGRAPHS["조음정밀 문단"]
+    else:
+        read_text = PARAGRAPHS["산책"]
 
-        if choice == "직접 입력":
-            if "read_text_custom" not in st.session_state:
-                st.session_state.read_text_custom = ""
-            read_text = st.text_area("낭독 문단 (직접 입력)", key="read_text_custom", height=170)
+    st.markdown(styled_text(read_text, font_size), unsafe_allow_html=True)
+
+    _computed_syl = _count_korean_syllables(read_text)
+    st.session_state["syl_rec_auto"] = _computed_syl
+    syllables_rec = st.number_input("전체 음절 수", 1, 500, st.session_state["syl_rec_auto"], key="syl_rec_auto", disabled=True)
+    st.session_state.user_syllables = _computed_syl
+
+    audio_buf = st.audio_input("낭독 녹음")
+    if st.button("🎙️ 녹음된 음성 분석"):
+        if audio_buf:
+            with open(TEMP_FILENAME, "wb") as f:
+                f.write(audio_buf.read())
+            st.session_state.current_wav_path = os.path.join(os.getcwd(), TEMP_FILENAME)
+            gcode = "M" if subject_gender == "남" else "F"
+            run_analysis_logic(st.session_state.current_wav_path, gcode)
         else:
-            # "제목 (n음절)" -> 제목만 추출
-            selected_key = re.sub(r"\s*\(.*?\)\s*$", "", choice)
-            # 선택이 바뀌면 기본 문단으로 리셋, 그 외(글자 크기 변경 등)에는 사용자 수정 유지
-            if st.session_state.get("read_selected_key") != selected_key:
-                st.session_state.read_selected_key = selected_key
-                st.session_state.read_text_selected = PARAGRAPHS[selected_key]
-            read_text = st.text_area("낭독 문단 (수정 가능)", key="read_text_selected", height=170)
+            st.warning("녹음부터 해주세요.")
 
-        syllables = _count_korean_syllables(read_text)
-        st.caption(f"총 음절수: **{syllables}음절**  ·  (문단 선택/수정 시 자동 반영)")
+with col_up:
+    st.markdown("#### 📂 파일 업로드")
+    up_file = st.file_uploader("WAV 파일 선택", type=["wav"])
+    if up_file:
+        st.audio(up_file, format='audio/wav')
+    if st.button("📂 업로드 파일 분석"):
+        if up_file:
+            with open(TEMP_FILENAME, "wb") as f:
+                f.write(up_file.read())
+            st.session_state.current_wav_path = os.path.join(os.getcwd(), TEMP_FILENAME)
+            gcode = "M" if subject_gender == "남" else "F"
+            run_analysis_logic(st.session_state.current_wav_path, gcode)
+        else:
+            st.warning("파일을 올려주세요.")
 
-        # 문장별 음절수(참고)
-        sentences = _split_sentences(read_text)
-        if len(sentences) > 1:
-            sent_counts = [_count_korean_syllables(s) for s in sentences]
-            with st.expander("문장별 음절수(참고)"):
-                for i, (s, c) in enumerate(zip(sentences, sent_counts), start=1):
-                    st.write(f"{i}. {c}음절 · {s}")
+# 3. 결과 및 저장
+if st.session_state.get('is_analyzed'):
+    st.markdown("---")
+    st.subheader("2. 분석 결과 및 보정")
 
-    # SPS 계산에 사용되는 목표 음절수 업데이트
-    st.session_state.user_syllables = max(int(syllables), 1)
+    c1, c2 = st.columns([2, 1])
 
-    with st.expander("🔎 내용 확인"):
-        st.write(read_text)
+    with c1:
+        st.plotly_chart(st.session_state['fig_plotly'], use_container_width=True)
+
+    with c2:
+        INTENSITY_CORR_DB_DEFAULT = 0.0
+        INTENSITY_CORR_DB_LOCK_VALUE = -5.0
+
         lock_db = st.checkbox(
             "강도 보정 고정(-5 dB) 사용(옵션)",
             value=False,
@@ -1297,6 +1376,23 @@ with col_rec:
         st.dataframe(result_df, hide_index=True)
 
     st.markdown("---")
+    if st.session_state.get('smr_events'):
+        st.markdown("##### 🔎 SMR 자동 분석 (단어 매칭)")
+        events = st.session_state['smr_events']
+        smr_df_data = {}
+        words = ["바닷가", "파도가", "무지개", "바둑이", "보트가", "버터구이", "포토카드", "부탁해", "돋보기", "빈대떡"]
+
+        for i, word in enumerate(words):
+            if i < len(events):
+                ev = events[i]
+                status = "🟢 양호" if ev['depth'] >= 20 else ("🟡 주의" if ev['depth'] >= 15 else "🔴 불량")
+                val = f"{ev['depth']:.1f}dB\n{status}"
+            else:
+                val = "미감지"
+            smr_df_data[word] = [val]
+
+        st.dataframe(pd.DataFrame(smr_df_data), use_container_width=True)
+
     st.markdown("---")
     st.subheader("3. 청지각 및 VHI-10 입력")
     cc1, cc2 = st.columns([1, 1.2])
@@ -1309,66 +1405,33 @@ with col_rec:
         p_rate = st.slider("말속도", 0, 100, int(st.session_state.get("p_rate", 50)), key="p_rate")
     with cc2:
         st.markdown("#### 📝 VHI-10")
-        st.caption("0: 전혀 그렇지 않다 · 1: 거의 그렇지 않다 · 2: 가끔 그렇다 · 3: 자주 그렇다 · 4: 항상 그렇다")
+        vhi_scale = {
+            0: "전혀 그렇지 않다",
+            1: "거의 그렇지 않다",
+            2: "가끔 그렇다",
+            3: "자주 그렇다",
+            4: "항상 그렇다",
+        }
         vhi_opts = [0, 1, 2, 3, 4]
+        st.caption("0=전혀 그렇지 않다 · 1=거의 그렇지 않다 · 2=가끔 그렇다 · 3=자주 그렇다 · 4=항상 그렇다")
+        _vhi_fmt = lambda x: f"{x} ({vhi_scale[x]})"
 
         with st.expander("VHI-10 문항 입력 (클릭해서 펼치기)", expanded=True):
+            q1 = st.select_slider("1. 사람들이 내 목소리를 듣는데 어려움을 느낀다.", options=vhi_opts, format_func=_vhi_fmt)
+            q2 = st.select_slider("2. 사람들이 내 말을 잘 못 알아들어 반복해야 한다.", options=vhi_opts, format_func=_vhi_fmt)
+            q3 = st.select_slider("3. 낯선 사람들과 전화로 대화하는 것이 어렵다.", options=vhi_opts, format_func=_vhi_fmt)
+            q4 = st.select_slider("4. 목소리 문제로 인해 긴장된다.", options=vhi_opts, format_func=_vhi_fmt)
+            q5 = st.select_slider("5. 목소리 문제로 인해 사람들을 피하게 된다.", options=vhi_opts, format_func=_vhi_fmt)
+            q6 = st.select_slider("6. 내 목소리 때문에 짜증이 난다.", options=vhi_opts, format_func=_vhi_fmt)
+            q7 = st.select_slider("7. 목소리 문제로 수입에 지장이 있다.", options=vhi_opts, format_func=_vhi_fmt)
+            q8 = st.select_slider("8. 내 목소리 문제로 대화가 제한된다.", options=vhi_opts, format_func=_vhi_fmt)
+            q9 = st.select_slider("9. 내 목소리 때문에 소외감을 느낀다.", options=vhi_opts, format_func=_vhi_fmt)
+            q10 = st.select_slider("10. 목소리를 내는 것이 힘들다.", options=vhi_opts, format_func=_vhi_fmt)
 
-            vhi_questions = [
-
-                "사람들이 내 목소리를 듣기 어려워한다.",
-
-                "사람들이 내 말을 이해하지 못해 내가 반복해서 말해야 한다.",
-
-                "내 목소리 때문에 내 가족이 답답해한다.",
-
-                "전화로 말할 때 문제가 있다.",
-
-                "사람들과 이야기할 때 긴장된다.",
-
-                "내 목소리 때문에 사회활동이 제한된다.",
-
-                "내 목소리 때문에 다른 사람들이 나를 피하는 것 같다.",
-
-                "내 목소리 때문에 내 성격이 위축된다.",
-
-                "내 목소리 때문에 내가 불리하다고 느낀다.",
-
-                "내 목소리 때문에 속상하다.",
-
-            ]
-
-            scores = []
-
-            for i, q in enumerate(vhi_questions):
-
-                st.write(f"{i+1}. {q}")
-
-                prev = st.session_state.get(f"vhi_{i}", 0)
-
-                try:
-
-                    idx = vhi_opts.index(int(prev))
-
-                except Exception:
-
-                    idx = 0
-
-                val = st.radio("", options=vhi_opts, index=idx, horizontal=True, key=f"vhi_{i}")
-
-                scores.append(int(val))
-
-                st.markdown("---")
-
-            q1, q2, q3, q4, q5, q6, q7, q8, q9, q10 = scores
-
-            vhi_total = int(sum(scores))
-
-            vhi_f = int(q5 + q8 + q10 + q2)
-
-            vhi_p = int(q1 + q4 + q6)
-
-            vhi_e = int(q3 + q7 + q9)
+        vhi_f = q1 + q2 + q5 + q7 + q8
+        vhi_p = q3 + q4 + q6
+        vhi_e = q9 + q10
+        vhi_total = vhi_f + vhi_p + vhi_e
 
         # Session에 저장(진단 시 참조)
         st.session_state["vhi_total"] = float(vhi_total)
