@@ -173,6 +173,8 @@ import hashlib
 import json
 from pathlib import Path
 
+from scipy.signal import find_peaks
+
 from sklearn.linear_model import LogisticRegression
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.model_selection import LeaveOneOut
@@ -1089,6 +1091,10 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
     except Exception as e:
         return False, str(e)
 
+
+# ==========================================
+# [SMR 측정 함수] (삭제됨)
+# ==========================================
 # ==========================================
 # [분석 로직] Median Ratio 필터로 확실한 옥타브 제거
 # ==========================================
@@ -1153,6 +1159,7 @@ def run_analysis_logic(file_path, gender=None):
         intensity = sound.to_intensity()
         mean_db = call(intensity, "Get mean", 0, 0, "energy")
         sps = st.session_state.user_syllables / dur if dur > 0 else 0
+
         st.session_state.update({
             'f0_mean': f0, 'pitch_range': rng, 'mean_db': mean_db,
             'sps': sps, 'duration': dur, 'fig_plotly': fig,
@@ -1220,59 +1227,47 @@ with col_rec:
     st.markdown("#### 🎙️ 마이크 녹음")
     font_size = st.slider("🔍 글자 크기", 15, 50, 28, key="fs_read")
 
-    # --- 낭독 문단(선택/수정 가능) ---
-    def _count_syllables_ko(txt: str) -> int:
-        # 한글 음절 블록(가-힣)만 카운트합니다.
-        return sum(1 for ch in (txt or "") if "가" <= ch <= "힣")
+    # --- 낭독 문단(고정) ---
+    def _count_syllables(text: str) -> int:
+        """한글 음절(가-힣) + 영문/숫자 1글자 단위로 카운트(공백/구두점 제외)."""
+        if not text:
+            return 0
+        n = 0
+        for ch in str(text):
+            if ('가' <= ch <= '힣') or ch.isdigit() or ('A' <= ch <= 'Z') or ('a' <= ch <= 'z'):
+                n += 1
+        return n
 
-    _READING_PARA_MAP = {
-        "walk": {
-            "title": "1. 산책 (일반용)",
-            "text": "높은 산에 올라가 맑은 공기를 마시며 소리를 지르면 가슴이 활짝 열리는 듯하다. 바닷가에 나가 조개를 주으며 넓게 펼쳐있는 바다를 바라보면 내 마음 역시 넓어지는 것 같다."
-        },
-        "sea": {
-            "title": "2. 바닷가의 추억 (정밀용)",
-            # 기존 문단은 유지하되, 실제 한글 음절 수가 80이 되도록 문장을 1개 보강했습니다.
-            "text": "바닷가에 파도가 칩니다. 무지개 아래 바둑이가 뜁니다. 보트가 지나가고 버터구이를 먹습니다. 포토카드를 부탁해서 돋보기로 봅니다. 시장에서 빈대떡을 사 먹었습니다. 천천히 한 번 더 또 읽어봅니다."
-        },
-        "artic": {
-            "title": "3. 조음정밀 문단 (정밀용)",
-            "text": "바닷가 부둣가 바닥에 비둘기 바둑이 본다, 다시 걷는다. 달·딸·탈, 바·빠·파, 가·까·카를 같은 박자로 끊지 말고 잇는다. 사과를 싸서 씻고, 조심히 찾아 차분히 웃는다. 노란 물 멀리 두고 말로 마무리하며 느리게 내려놓는다."
-        },
+    _READING_TEXTS = {
+        "1. 산책": "높은 산에 올라가 맑은 공기를 마시며 소리를 지르면 가슴이 활짝 열리는 듯하다. 바닷가에 나가 조개를 주으며 넓게 펼쳐있는 바다를 바라보면 내 마음 역시 넓어지는 것 같다.",
+        "2. 바닷가의 추억": "바닷가에 파도가 칩니다. 무지개 아래 바둑이가 뜁니다. 보트가 지나가고 버터구이를 먹습니다. 포토카드를 부탁해서 돋보기로 봅니다. 시장에서 빈대떡을 사 먹었습니다.",
+        "3. 조음정밀": "바닷가 부둣가 바닥에 비둘기 바둑이 본다, 다시 걷는다. 달·딸·탈, 바·빠·파, 가·까·카를 같은 박자로 끊지 말고 잇는다. 사과를 싸서 씻고, 조심히 찾아 차분히 웃는다. 노란 물 멀리 두고 말로 마무리하며 느리게 내려놓는다.",
     }
 
-    _READING_OPTIONS = []
-    _opt_to_id = {}
-    for _pid, _p in _READING_PARA_MAP.items():
-        _syl = _count_syllables_ko(_p["text"])
-        _opt = f"{_p['title']} - {_syl}음절"
-        _READING_OPTIONS.append(_opt)
-        _opt_to_id[_opt] = _pid
-
-    # 기본 선택
-    _default_opt = _READING_OPTIONS[0]
-    read_opt = st.radio("📖 낭독 문단 선택", _READING_OPTIONS, key="read_opt", index=0)
-
-    _selected_id = _opt_to_id.get(read_opt, "walk")
-    if st.session_state.get("selected_read_para_id") != _selected_id:
-        st.session_state["selected_read_para_id"] = _selected_id
-        st.session_state["read_text_input"] = _READING_PARA_MAP[_selected_id]["text"]
-
-    # 문단 수정(선택한 문단만 수정)
-    st.text_area("✏️ 문단 수정(선택 문단)", key="read_text_input", height=160)
+    _reading_options = [f"{k} ({_count_syllables(v)}음절)" for k, v in _READING_TEXTS.items()]
+    read_opt = st.radio("📖 낭독 문단 선택", _reading_options)
 
     def styled_text(text, size):
         return f"""<div style="font-size: {size}px; line-height: 1.8; border: 1px solid #ddd; padding: 15px; background-color: #f9f9f9; color: #333;">{text}</div>"""
 
-    read_text = st.session_state.get("read_text_input", "")
+    _read_key = read_opt.split(" (")[0]
+    read_text = _READING_TEXTS.get(_read_key, "")
+    auto_syl = _count_syllables(read_text)
+
+    # 문단 선택 시 자동 음절수로 초기화(단, 이후 사용자가 수정 가능)
+    if st.session_state.get("read_opt_prev") != _read_key:
+        st.session_state["syllables_total"] = int(auto_syl) if auto_syl > 0 else 1
+        st.session_state["read_opt_prev"] = _read_key
+
     st.markdown(styled_text(read_text, font_size), unsafe_allow_html=True)
 
-    # 문단 선택/수정 시 자동 음절 수 갱신
-    current_syl = int(_count_syllables_ko(read_text))
-    st.session_state.user_syllables = current_syl
-    st.session_state["syllables_rec_display"] = current_syl
-    st.number_input("전체 음절 수(자동)", 1, 5000, current_syl, key="syllables_rec_display", disabled=True)
-    st.caption(f"현재 문단 음절 수: **{current_syl}**")
+    syllables_rec = st.number_input(
+        "전체 음절 수 (자동 계산, 필요 시 수정)",
+        1, 500,
+        key="syllables_total"
+    )
+    st.caption(f"자동 계산 음절 수: {auto_syl}음절")
+    st.session_state.user_syllables = syllables_rec
 
     audio_buf = st.audio_input("낭독 녹음")
     if st.button("🎙️ 녹음된 음성 분석"):
@@ -1363,6 +1358,9 @@ if st.session_state.get('is_analyzed'):
             "수치": [f"{final_db:.2f}", f"{float(st.session_state['f0_mean']):.2f}", f"{float(range_adj):.2f}", f"{float(st.session_state.get('sps_final', final_sps)):.2f}"]
         })
         st.dataframe(result_df, hide_index=True)
+
+    st.markdown("---")
+
     st.markdown("---")
     st.subheader("3. 청지각 및 VHI-10 입력")
     cc1, cc2 = st.columns([1, 1.2])
@@ -1375,20 +1373,20 @@ if st.session_state.get('is_analyzed'):
         p_rate = st.slider("말속도", 0, 100, int(st.session_state.get("p_rate", 50)), key="p_rate")
     with cc2:
         st.markdown("#### 📝 VHI-10")
-        st.caption("0: 전혀 그렇지 않다 · 1: 거의 그렇지 않다 · 2: 가끔 그렇다 · 3: 자주 그렇다 · 4: 항상 그렇다")
+        st.caption("0 전혀 그렇지 않다 · 1 거의 그렇지 않다 · 2 가끔 그렇다 · 3 자주 그렇다 · 4 항상 그렇다")
         vhi_opts = [0, 1, 2, 3, 4]
 
         with st.expander("VHI-10 문항 입력 (클릭해서 펼치기)", expanded=True):
-            q1 = st.radio("1. 사람들이 내 목소리를 듣는데 어려움을 느낀다.", vhi_opts, horizontal=True, key="vhi_q1")
-            q2 = st.radio("2. 사람들이 내 말을 잘 못 알아들어 반복해야 한다.", vhi_opts, horizontal=True, key="vhi_q2")
-            q3 = st.radio("3. 낯선 사람들과 전화로 대화하는 것이 어렵다.", vhi_opts, horizontal=True, key="vhi_q3")
-            q4 = st.radio("4. 목소리 문제로 인해 긴장된다.", vhi_opts, horizontal=True, key="vhi_q4")
-            q5 = st.radio("5. 목소리 문제로 인해 사람들을 피하게 된다.", vhi_opts, horizontal=True, key="vhi_q5")
-            q6 = st.radio("6. 내 목소리 때문에 짜증이 난다.", vhi_opts, horizontal=True, key="vhi_q6")
-            q7 = st.radio("7. 목소리 문제로 수입에 지장이 있다.", vhi_opts, horizontal=True, key="vhi_q7")
-            q8 = st.radio("8. 내 목소리 문제로 대화가 제한된다.", vhi_opts, horizontal=True, key="vhi_q8")
-            q9 = st.radio("9. 내 목소리 때문에 소외감을 느낀다.", vhi_opts, horizontal=True, key="vhi_q9")
-            q10 = st.radio("10. 목소리를 내는 것이 힘들다.", vhi_opts, horizontal=True, key="vhi_q10")
+            q1 = st.radio("1. 사람들이 내 목소리를 듣는데 어려움을 느낀다.", options=vhi_opts, horizontal=True, key="vhi_q1")
+            q2 = st.radio("2. 사람들이 내 말을 잘 못 알아들어 반복해야 한다.", options=vhi_opts, horizontal=True, key="vhi_q2")
+            q3 = st.radio("3. 낯선 사람들과 전화로 대화하는 것이 어렵다.", options=vhi_opts, horizontal=True, key="vhi_q3")
+            q4 = st.radio("4. 목소리 문제로 인해 긴장된다.", options=vhi_opts, horizontal=True, key="vhi_q4")
+            q5 = st.radio("5. 목소리 문제로 인해 사람들을 피하게 된다.", options=vhi_opts, horizontal=True, key="vhi_q5")
+            q6 = st.radio("6. 내 목소리 때문에 짜증이 난다.", options=vhi_opts, horizontal=True, key="vhi_q6")
+            q7 = st.radio("7. 목소리 문제로 수입에 지장이 있다.", options=vhi_opts, horizontal=True, key="vhi_q7")
+            q8 = st.radio("8. 내 목소리 문제로 대화가 제한된다.", options=vhi_opts, horizontal=True, key="vhi_q8")
+            q9 = st.radio("9. 내 목소리 때문에 소외감을 느낀다.", options=vhi_opts, horizontal=True, key="vhi_q9")
+            q10 = st.radio("10. 목소리를 내는 것이 힘들다.", options=vhi_opts, horizontal=True, key="vhi_q10")
 
         vhi_f = q1 + q2 + q5 + q7 + q8
         vhi_p = q3 + q4 + q6
