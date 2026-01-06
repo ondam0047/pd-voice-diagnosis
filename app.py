@@ -1180,7 +1180,7 @@ with col_rec:
     PARAGRAPHS = {
         "산책": "높은 산에 올라가 맑은 공기를 마시며 소리를 지르면 가슴이 활짝 열리는 듯하다. 바닷가에 나가 조개를 주으며 넓게 펼쳐있는 바다를 바라보면 내 마음 역시 넓어지는 것 같다.",
         "바닷가의 추억": "바닷가에 파도가 칩니다. 무지개 아래 바둑이가 뜁니다. 보트가 지나가고 버터구이를 먹습니다. 포토카드를 부탁해서 돋보기로 봅니다. 시장에서 빈대떡을 사 먹었습니다.",
-        "조음 정밀 문단": "바닷가 부둣가 바닥에 비둘기 바둑이 본다, 다시 걷는다. 달·딸·탈, 바·빠·파, 가·까·카를 같은 박자로 끊지 말고 잇는다. 사과를 싸서 씻고, 조심히 찾아 차분히 웃는다. 노란 물 멀리 두고 말로 마무리하며 느리게 내려놓는다.",
+        "조음 정밀 문단": "바닷가 부둣가 바닥에 비둘기 바둑이 본다, 다시 걷는다.\n달·딸·탈, 바·빠·파, 가·까·카를 같은 박자로 끊지 말고 잇는다.\n사과를 싸서 씻고, 조심히 찾아 차분히 웃는다.\n노란 물 멀리 두고 말로 마무리하며 느리게 내려놓는다.",
     }
     para_counts = {k: _count_korean_syllables(v) for k, v in PARAGRAPHS.items()}
 
@@ -1197,6 +1197,13 @@ with col_rec:
         st.text_area("선택된 문단", value=read_text, height=120, disabled=True)
 
     st.caption(f"총 음절수: {syllables} 음절")
+    # 문장별 음절수(선택 문단/직접 입력 모두)
+    sentences = _split_sentences(read_text)
+    if sentences:
+        with st.expander("📌 문장별 음절수", expanded=False):
+            for s in sentences:
+                st.write(f"- {s}  ({_count_korean_syllables(s)}음절)")
+
     st.session_state.user_syllables = max(int(syllables), 1)
 
     with st.expander("🔎 내용 확인"):
