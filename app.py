@@ -1565,8 +1565,8 @@ if st.session_state.get('is_analyzed'):
 
                 # 🕸️ PD 하위집단 확률 스파이더 차트(혼합형 확인용)
                 try:
-                    _labels = list(sub_classes)
                     _vals = [float(p) * 100 for p in probs_sub]
+                    _labels = [f"{lbl} ({val:.1f}%)" for lbl, val in zip(sub_classes, _vals)]
                     fig_sub = go.Figure()
                     fig_sub.add_trace(go.Scatterpolar(r=_vals, theta=_labels, fill='toself'))
                     fig_sub.update_layout(
@@ -1620,8 +1620,8 @@ if st.session_state.get('is_analyzed'):
 
                     # 🕸️ 참고용 하위집단 확률 스파이더 차트
                     try:
-                        _labels = list(sub_classes)
                         _vals = [float(p) * 100 for p in probs_sub]
+                        _labels = [f"{lbl} ({val:.1f}%)" for lbl, val in zip(sub_classes, _vals)]
                         fig_sub = go.Figure()
                         fig_sub.add_trace(go.Scatterpolar(r=_vals, theta=_labels, fill='toself'))
                         fig_sub.update_layout(
