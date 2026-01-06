@@ -11,6 +11,7 @@ import platform
 import datetime
 import io
 
+import html
 # --- Step1 학습 통계(가드/해석용) ---
 STATS_STEP1 = {}
 
@@ -1241,14 +1242,17 @@ with col_rec:
     _READING_TEXTS = {
         "1. 산책": "높은 산에 올라가 맑은 공기를 마시며 소리를 지르면 가슴이 활짝 열리는 듯하다. 바닷가에 나가 조개를 주으며 넓게 펼쳐있는 바다를 바라보면 내 마음 역시 넓어지는 것 같다.",
         "2. 바닷가의 추억": "바닷가에 파도가 칩니다. 무지개 아래 바둑이가 뜁니다. 보트가 지나가고 버터구이를 먹습니다. 포토카드를 부탁해서 돋보기로 봅니다. 시장에서 빈대떡을 사 먹었습니다.",
-        "3. 조음정밀": "바닷가 부둣가 바닥에 비둘기 바둑이 본다, 다시 걷는다. 달·딸·탈, 바·빠·파, 가·까·카를 같은 박자로 끊지 말고 잇는다. 사과를 싸서 씻고, 조심히 찾아 차분히 웃는다. 노란 물 멀리 두고 말로 마무리하며 느리게 내려놓는다.",
+        "3. 조음정밀": """바닷가 부둣가 바닥에 비둘기 바둑이 본다, 다시 걷는다.
+달·딸·탈, 바·빠·파, 가·까·카를 같은 박자로 끊지 말고 잇는다.
+사과를 싸서 씻고, 조심히 찾아 차분히 웃는다.
+노란 물 멀리 두고 말로 마무리하며 느리게 내려놓는다.""",
     }
 
     _reading_options = [f"{k} ({_count_syllables(v)}음절)" for k, v in _READING_TEXTS.items()]
     read_opt = st.radio("📖 낭독 문단 선택", _reading_options)
-
     def styled_text(text, size):
-        return f"""<div style="font-size: {size}px; line-height: 1.8; border: 1px solid #ddd; padding: 15px; background-color: #f9f9f9; color: #333;">{text}</div>"""
+        safe = html.escape(str(text)).replace("\n", "<br>")
+        return f"""<div style=\"font-size: {size}px; line-height: 1.65; padding: 10px; border-radius: 10px; border: 1px solid #ddd; margin-top: 6px; margin-bottom: 6px; background-color: #f9f9f9; color: #333;\">{safe}</div>"""
 
     _read_key = read_opt.split(" (")[0]
     read_text = _READING_TEXTS.get(_read_key, "")
@@ -1260,6 +1264,17 @@ with col_rec:
         st.session_state["read_opt_prev"] = _read_key
 
     st.markdown(styled_text(read_text, font_size), unsafe_allow_html=True)
+
+    if _read_key == "3. 조음정밀":
+        st.markdown(
+            "<div style='font-size: 13px; color: #555; margin-top: 4px;'>"
+            "조음 위치 전환(양순–치조–연구)<br>"
+            "경음/평음/기식음 대조<br>"
+            "마찰/파찰(ㅅ·ㅆ·ㅈ·ㅊ) 정밀도<br>"
+            "유음/비음(ㄹ·ㄴ·ㅁ) 안정성"
+            "</div>",
+            unsafe_allow_html=True
+        )
 
     syllables_rec = st.number_input(
         "전체 음절 수 (자동 계산, 필요 시 수정)",
@@ -1373,20 +1388,30 @@ if st.session_state.get('is_analyzed'):
         p_rate = st.slider("말속도", 0, 100, int(st.session_state.get("p_rate", 50)), key="p_rate")
     with cc2:
         st.markdown("#### 📝 VHI-10")
-        st.caption("0 전혀 그렇지 않다 · 1 거의 그렇지 않다 · 2 가끔 그렇다 · 3 자주 그렇다 · 4 항상 그렇다")
+        st.caption("0 전혀 그렇지 않다. 1 거의 그렇지 않다. 2 가끔 그렇다. 3 자주 그렇다. 4 항상 그렇다")
         vhi_opts = [0, 1, 2, 3, 4]
+        _VHI_LABELS = {
+            0: "전혀 그렇지 않다",
+            1: "거의 그렇지 않다",
+            2: "가끔 그렇다",
+            3: "자주 그렇다",
+            4: "항상 그렇다",
+        }
+        def _vhi_fmt(x):
+            return f"{x} { _VHI_LABELS.get(int(x), '') }"
+
 
         with st.expander("VHI-10 문항 입력 (클릭해서 펼치기)", expanded=True):
-            q1 = st.radio("1. 사람들이 내 목소리를 듣는데 어려움을 느낀다.", options=vhi_opts, horizontal=True, key="vhi_q1")
-            q2 = st.radio("2. 사람들이 내 말을 잘 못 알아들어 반복해야 한다.", options=vhi_opts, horizontal=True, key="vhi_q2")
-            q3 = st.radio("3. 낯선 사람들과 전화로 대화하는 것이 어렵다.", options=vhi_opts, horizontal=True, key="vhi_q3")
-            q4 = st.radio("4. 목소리 문제로 인해 긴장된다.", options=vhi_opts, horizontal=True, key="vhi_q4")
-            q5 = st.radio("5. 목소리 문제로 인해 사람들을 피하게 된다.", options=vhi_opts, horizontal=True, key="vhi_q5")
-            q6 = st.radio("6. 내 목소리 때문에 짜증이 난다.", options=vhi_opts, horizontal=True, key="vhi_q6")
-            q7 = st.radio("7. 목소리 문제로 수입에 지장이 있다.", options=vhi_opts, horizontal=True, key="vhi_q7")
-            q8 = st.radio("8. 내 목소리 문제로 대화가 제한된다.", options=vhi_opts, horizontal=True, key="vhi_q8")
-            q9 = st.radio("9. 내 목소리 때문에 소외감을 느낀다.", options=vhi_opts, horizontal=True, key="vhi_q9")
-            q10 = st.radio("10. 목소리를 내는 것이 힘들다.", options=vhi_opts, horizontal=True, key="vhi_q10")
+            q1 = st.radio("1. 사람들이 내 목소리를 듣는데 어려움을 느낀다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q1")
+            q2 = st.radio("2. 사람들이 내 말을 잘 못 알아들어 반복해야 한다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q2")
+            q3 = st.radio("3. 낯선 사람들과 전화로 대화하는 것이 어렵다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q3")
+            q4 = st.radio("4. 목소리 문제로 인해 긴장된다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q4")
+            q5 = st.radio("5. 목소리 문제로 인해 사람들을 피하게 된다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q5")
+            q6 = st.radio("6. 내 목소리 때문에 짜증이 난다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q6")
+            q7 = st.radio("7. 목소리 문제로 수입에 지장이 있다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q7")
+            q8 = st.radio("8. 내 목소리 문제로 대화가 제한된다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q8")
+            q9 = st.radio("9. 내 목소리 때문에 소외감을 느낀다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q9")
+            q10 = st.radio("10. 목소리를 내는 것이 힘들다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q10")
 
         vhi_f = q1 + q2 + q5 + q7 + q8
         vhi_p = q3 + q4 + q6
@@ -1537,6 +1562,27 @@ if st.session_state.get('is_analyzed'):
 
                 # 혼합형 판단
                 _pairs = sorted(zip(sub_classes, probs_sub), key=lambda x: float(x[1]), reverse=True)
+
+                # 🕸️ PD 하위집단 확률 스파이더 차트(혼합형 확인용)
+                try:
+                    _labels = list(sub_classes)
+                    _vals = [float(p) * 100 for p in probs_sub]
+                    fig_sub = go.Figure()
+                    fig_sub.add_trace(go.Scatterpolar(r=_vals, theta=_labels, fill='toself'))
+                    fig_sub.update_layout(
+                        title="🕸️ PD 하위집단 확률(스파이더 차트)",
+                        polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+                        showlegend=False,
+                        height=360,
+                        margin=dict(l=20, r=20, t=60, b=20)
+                    )
+                    st.plotly_chart(fig_sub, use_container_width=True)
+                    with st.expander("하위집단 확률 자세히 보기", expanded=False):
+                        for lbl, p in sorted(zip(_labels, _vals), key=lambda x: x[1], reverse=True):
+                            st.write(f"- {lbl}: {p:.1f}%")
+                except Exception:
+                    pass
+
                 _top1_lbl, _top1_p = _pairs[0][0], float(_pairs[0][1])
                 _top2_lbl, _top2_p = (_pairs[1][0], float(_pairs[1][1])) if len(_pairs) > 1 else (None, 0.0)
                 _is_mixed = (_top2_lbl is not None) and ((_top1_p - _top2_p) < MIX_MARGIN_P)
@@ -1571,6 +1617,24 @@ if st.session_state.get('is_analyzed'):
                     probs_sub = model_step2.predict_proba(input_2.to_numpy())[0]
                     sub_classes = list(model_step2.classes_)
                     pairs = sorted(zip(sub_classes, probs_sub), key=lambda x: float(x[1]), reverse=True)
+
+                    # 🕸️ 참고용 하위집단 확률 스파이더 차트
+                    try:
+                        _labels = list(sub_classes)
+                        _vals = [float(p) * 100 for p in probs_sub]
+                        fig_sub = go.Figure()
+                        fig_sub.add_trace(go.Scatterpolar(r=_vals, theta=_labels, fill='toself'))
+                        fig_sub.update_layout(
+                            title="🕸️ (참고) PD 하위집단 확률(스파이더 차트)",
+                            polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+                            showlegend=False,
+                            height=320,
+                            margin=dict(l=20, r=20, t=60, b=20)
+                        )
+                        st.plotly_chart(fig_sub, use_container_width=True)
+                    except Exception:
+                        pass
+
                     if pairs:
                         st.caption("참고 하위집단 확률(상위 2개)")
                         st.write(f"- {pairs[0][0]}: {pairs[0][1]*100:.1f}%")
