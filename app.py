@@ -11,7 +11,6 @@ import platform
 import datetime
 import io
 
-import re
 # --- Step1 학습 통계(가드/해석용) ---
 STATS_STEP1 = {}
 
@@ -1251,39 +1250,22 @@ with col_rec:
     st.markdown("#### 🎙️ 마이크 녹음")
     font_size = st.slider("🔍 글자 크기", 15, 50, 28, key="fs_read")
 
-    # (추가) 조음 정밀 평가용 문단 포함 + 자동 음절 수 갱신
-    PARAGRAPHS = {
-        "산책": '높은 산에 올라가 맑은 공기를 마시며 소리를 지르면 가슴이 활짝 열리는 듯하다. 바닷가에 나가 조개를 주으며 넓게 펼쳐있는 바다를 바라보면 내 마음 역시 넓어지는 것 같다.',
-        "바닷가의 추억": '바닷가에 파도가 칩니다. 무지개 아래 바둑이가 뜁니다. 보트가 지나가고 버터구이를 먹습니다. 포토카드를 부탁해서 돋보기로 봅니다. 시장에서 빈대떡을 사 먹었습니다.',
-        "조음정밀 문단": '바닷가 부둣가 바닥에 비둘기 바둑이 본다, 다시 걷는다. 달·딸·탈, 바·빠·파, 가·까·카를 같은 박자로 끊지 말고 잇는다. 사과를 싸서 씻고, 조심히 찾아 차분히 웃는다. 노란 물 멀리 두고 말로 마무리하며 느리게 내려놓는다.',
-    }
-
-    def _count_korean_syllables(s: str) -> int:
-        return len(re.findall(r"[가-힣]", s))
-
-    _para_labels = [
-        f"1. 산책 (일반용 - {_count_korean_syllables(PARAGRAPHS['산책'])}음절)",
-        f"2. 바닷가의 추억 (SMR/정밀용 - {_count_korean_syllables(PARAGRAPHS['바닷가의 추억'])}음절)",
-        f"3. 조음정밀 문단 (조음/대조용 - {_count_korean_syllables(PARAGRAPHS['조음정밀 문단'])}음절)",
-    ]
-    read_opt = st.radio("📖 낭독 문단 선택", _para_labels)
+    read_opt = st.radio("📖 낭독 문단 선택", ["1. 산책 (일반용 - 69음절)", "2. 바닷가의 추억 (SMR/정밀용 - 80음절)"])
 
     def styled_text(text, size):
         return f"""<div style="font-size: {size}px; line-height: 1.8; border: 1px solid #ddd; padding: 15px; background-color: #f9f9f9; color: #333;">{text}</div>"""
 
-    if read_opt.startswith("2."):
-        read_text = PARAGRAPHS["바닷가의 추억"]
-    elif read_opt.startswith("3."):
-        read_text = PARAGRAPHS["조음정밀 문단"]
+    if "바닷가" in read_opt:
+        read_text = "바닷가에 파도가 칩니다. 무지개 아래 바둑이가 뜁니다. 보트가 지나가고 버터구이를 먹습니다. 포토카드를 부탁해서 돋보기로 봅니다. 시장에서 빈대떡을 사 먹었습니다."
+        default_syl = 80
     else:
-        read_text = PARAGRAPHS["산책"]
+        read_text = "높은 산에 올라가 맑은 공기를 마시며 소리를 지르면 가슴이 활짝 열리는 듯하다. 바닷가에 나가 조개를 주으며 넓게 펼쳐있는 바다를 바라보면 내 마음 역시 넓어지는 것 같다."
+        default_syl = 69
 
     st.markdown(styled_text(read_text, font_size), unsafe_allow_html=True)
 
-    _computed_syl = _count_korean_syllables(read_text)
-    st.session_state["syl_rec_auto"] = _computed_syl
-    syllables_rec = st.number_input("전체 음절 수", 1, 500, st.session_state["syl_rec_auto"], key="syl_rec_auto", disabled=True)
-    st.session_state.user_syllables = _computed_syl
+    syllables_rec = st.number_input("전체 음절 수", 1, 500, default_syl, key=f"syl_rec_{read_opt}")
+    st.session_state.user_syllables = syllables_rec
 
     audio_buf = st.audio_input("낭독 녹음")
     if st.button("🎙️ 녹음된 음성 분석"):
@@ -1405,28 +1387,19 @@ if st.session_state.get('is_analyzed'):
         p_rate = st.slider("말속도", 0, 100, int(st.session_state.get("p_rate", 50)), key="p_rate")
     with cc2:
         st.markdown("#### 📝 VHI-10")
-        vhi_scale = {
-            0: "전혀 그렇지 않다",
-            1: "거의 그렇지 않다",
-            2: "가끔 그렇다",
-            3: "자주 그렇다",
-            4: "항상 그렇다",
-        }
         vhi_opts = [0, 1, 2, 3, 4]
-        st.caption("0=전혀 그렇지 않다 · 1=거의 그렇지 않다 · 2=가끔 그렇다 · 3=자주 그렇다 · 4=항상 그렇다")
-        _vhi_fmt = lambda x: f"{x} ({vhi_scale[x]})"
 
         with st.expander("VHI-10 문항 입력 (클릭해서 펼치기)", expanded=True):
-            q1 = st.select_slider("1. 사람들이 내 목소리를 듣는데 어려움을 느낀다.", options=vhi_opts, format_func=_vhi_fmt)
-            q2 = st.select_slider("2. 사람들이 내 말을 잘 못 알아들어 반복해야 한다.", options=vhi_opts, format_func=_vhi_fmt)
-            q3 = st.select_slider("3. 낯선 사람들과 전화로 대화하는 것이 어렵다.", options=vhi_opts, format_func=_vhi_fmt)
-            q4 = st.select_slider("4. 목소리 문제로 인해 긴장된다.", options=vhi_opts, format_func=_vhi_fmt)
-            q5 = st.select_slider("5. 목소리 문제로 인해 사람들을 피하게 된다.", options=vhi_opts, format_func=_vhi_fmt)
-            q6 = st.select_slider("6. 내 목소리 때문에 짜증이 난다.", options=vhi_opts, format_func=_vhi_fmt)
-            q7 = st.select_slider("7. 목소리 문제로 수입에 지장이 있다.", options=vhi_opts, format_func=_vhi_fmt)
-            q8 = st.select_slider("8. 내 목소리 문제로 대화가 제한된다.", options=vhi_opts, format_func=_vhi_fmt)
-            q9 = st.select_slider("9. 내 목소리 때문에 소외감을 느낀다.", options=vhi_opts, format_func=_vhi_fmt)
-            q10 = st.select_slider("10. 목소리를 내는 것이 힘들다.", options=vhi_opts, format_func=_vhi_fmt)
+            q1 = st.select_slider("1. 사람들이 내 목소리를 듣는데 어려움을 느낀다.", options=vhi_opts)
+            q2 = st.select_slider("2. 사람들이 내 말을 잘 못 알아들어 반복해야 한다.", options=vhi_opts)
+            q3 = st.select_slider("3. 낯선 사람들과 전화로 대화하는 것이 어렵다.", options=vhi_opts)
+            q4 = st.select_slider("4. 목소리 문제로 인해 긴장된다.", options=vhi_opts)
+            q5 = st.select_slider("5. 목소리 문제로 인해 사람들을 피하게 된다.", options=vhi_opts)
+            q6 = st.select_slider("6. 내 목소리 때문에 짜증이 난다.", options=vhi_opts)
+            q7 = st.select_slider("7. 목소리 문제로 수입에 지장이 있다.", options=vhi_opts)
+            q8 = st.select_slider("8. 내 목소리 문제로 대화가 제한된다.", options=vhi_opts)
+            q9 = st.select_slider("9. 내 목소리 때문에 소외감을 느낀다.", options=vhi_opts)
+            q10 = st.select_slider("10. 목소리를 내는 것이 힘들다.", options=vhi_opts)
 
         vhi_f = q1 + q2 + q5 + q7 + q8
         vhi_p = q3 + q4 + q6
