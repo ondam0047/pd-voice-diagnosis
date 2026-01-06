@@ -173,8 +173,6 @@ import hashlib
 import json
 from pathlib import Path
 
-from scipy.signal import find_peaks
-
 from sklearn.linear_model import LogisticRegression
 from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
 from sklearn.model_selection import LeaveOneOut
@@ -1092,31 +1090,6 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
         return False, str(e)
 
 # ==========================================
-# [SMR 측정 함수]
-# ==========================================
-def auto_detect_smr_events(sound_path, top_n=20):
-    try:
-        sound = parselmouth.Sound(sound_path)
-        intensity = sound.to_intensity(time_step=0.005)
-        times = intensity.xs()
-        values = intensity.values[0, :]
-        inv_vals = -values
-        peaks, properties = find_peaks(inv_vals, prominence=5, distance=40)
-        candidates = []
-        for p_idx in peaks:
-            time_point = times[p_idx]
-            v_int = values[p_idx]
-            start_search = max(0, p_idx - 20)
-            end_search = min(len(values), p_idx + 20)
-            local_max = np.max(values[start_search:end_search])
-            depth = local_max - v_int
-            candidates.append({"time": time_point, "depth": depth})
-        candidates.sort(key=lambda x: x['time'])
-        return candidates, len(candidates)
-    except Exception:
-        return [], 0
-
-# ==========================================
 # [분석 로직] Median Ratio 필터로 확실한 옥타브 제거
 # ==========================================
 def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
@@ -1180,12 +1153,9 @@ def run_analysis_logic(file_path, gender=None):
         intensity = sound.to_intensity()
         mean_db = call(intensity, "Get mean", 0, 0, "energy")
         sps = st.session_state.user_syllables / dur if dur > 0 else 0
-        smr_events, smr_count = auto_detect_smr_events(file_path)
-
         st.session_state.update({
             'f0_mean': f0, 'pitch_range': rng, 'mean_db': mean_db,
             'sps': sps, 'duration': dur, 'fig_plotly': fig,
-            'smr_events': smr_events, 'smr_count': smr_count,
             'is_analyzed': True, 'is_saved': False
         })
         return True
@@ -1250,22 +1220,59 @@ with col_rec:
     st.markdown("#### 🎙️ 마이크 녹음")
     font_size = st.slider("🔍 글자 크기", 15, 50, 28, key="fs_read")
 
-    read_opt = st.radio("📖 낭독 문단 선택", ["1. 산책 (일반용 - 69음절)", "2. 바닷가의 추억 (SMR/정밀용 - 80음절)"])
+    # --- 낭독 문단(선택/수정 가능) ---
+    def _count_syllables_ko(txt: str) -> int:
+        # 한글 음절 블록(가-힣)만 카운트합니다.
+        return sum(1 for ch in (txt or "") if "가" <= ch <= "힣")
+
+    _READING_PARA_MAP = {
+        "walk": {
+            "title": "1. 산책 (일반용)",
+            "text": "높은 산에 올라가 맑은 공기를 마시며 소리를 지르면 가슴이 활짝 열리는 듯하다. 바닷가에 나가 조개를 주으며 넓게 펼쳐있는 바다를 바라보면 내 마음 역시 넓어지는 것 같다."
+        },
+        "sea": {
+            "title": "2. 바닷가의 추억 (정밀용)",
+            # 기존 문단은 유지하되, 실제 한글 음절 수가 80이 되도록 문장을 1개 보강했습니다.
+            "text": "바닷가에 파도가 칩니다. 무지개 아래 바둑이가 뜁니다. 보트가 지나가고 버터구이를 먹습니다. 포토카드를 부탁해서 돋보기로 봅니다. 시장에서 빈대떡을 사 먹었습니다. 천천히 한 번 더 또 읽어봅니다."
+        },
+        "artic": {
+            "title": "3. 조음정밀 문단 (정밀용)",
+            "text": "바닷가 부둣가 바닥에 비둘기 바둑이 본다, 다시 걷는다. 달·딸·탈, 바·빠·파, 가·까·카를 같은 박자로 끊지 말고 잇는다. 사과를 싸서 씻고, 조심히 찾아 차분히 웃는다. 노란 물 멀리 두고 말로 마무리하며 느리게 내려놓는다."
+        },
+    }
+
+    _READING_OPTIONS = []
+    _opt_to_id = {}
+    for _pid, _p in _READING_PARA_MAP.items():
+        _syl = _count_syllables_ko(_p["text"])
+        _opt = f"{_p['title']} - {_syl}음절"
+        _READING_OPTIONS.append(_opt)
+        _opt_to_id[_opt] = _pid
+
+    # 기본 선택
+    _default_opt = _READING_OPTIONS[0]
+    read_opt = st.radio("📖 낭독 문단 선택", _READING_OPTIONS, key="read_opt", index=0)
+
+    _selected_id = _opt_to_id.get(read_opt, "walk")
+    if st.session_state.get("selected_read_para_id") != _selected_id:
+        st.session_state["selected_read_para_id"] = _selected_id
+        st.session_state["read_text_input"] = _READING_PARA_MAP[_selected_id]["text"]
+
+    # 문단 수정(선택한 문단만 수정)
+    st.text_area("✏️ 문단 수정(선택 문단)", key="read_text_input", height=160)
 
     def styled_text(text, size):
         return f"""<div style="font-size: {size}px; line-height: 1.8; border: 1px solid #ddd; padding: 15px; background-color: #f9f9f9; color: #333;">{text}</div>"""
 
-    if "바닷가" in read_opt:
-        read_text = "바닷가에 파도가 칩니다. 무지개 아래 바둑이가 뜁니다. 보트가 지나가고 버터구이를 먹습니다. 포토카드를 부탁해서 돋보기로 봅니다. 시장에서 빈대떡을 사 먹었습니다."
-        default_syl = 80
-    else:
-        read_text = "높은 산에 올라가 맑은 공기를 마시며 소리를 지르면 가슴이 활짝 열리는 듯하다. 바닷가에 나가 조개를 주으며 넓게 펼쳐있는 바다를 바라보면 내 마음 역시 넓어지는 것 같다."
-        default_syl = 69
-
+    read_text = st.session_state.get("read_text_input", "")
     st.markdown(styled_text(read_text, font_size), unsafe_allow_html=True)
 
-    syllables_rec = st.number_input("전체 음절 수", 1, 500, default_syl, key=f"syl_rec_{read_opt}")
-    st.session_state.user_syllables = syllables_rec
+    # 문단 선택/수정 시 자동 음절 수 갱신
+    current_syl = int(_count_syllables_ko(read_text))
+    st.session_state.user_syllables = current_syl
+    st.session_state["syllables_rec_display"] = current_syl
+    st.number_input("전체 음절 수(자동)", 1, 5000, current_syl, key="syllables_rec_display", disabled=True)
+    st.caption(f"현재 문단 음절 수: **{current_syl}**")
 
     audio_buf = st.audio_input("낭독 녹음")
     if st.button("🎙️ 녹음된 음성 분석"):
@@ -1356,25 +1363,6 @@ if st.session_state.get('is_analyzed'):
             "수치": [f"{final_db:.2f}", f"{float(st.session_state['f0_mean']):.2f}", f"{float(range_adj):.2f}", f"{float(st.session_state.get('sps_final', final_sps)):.2f}"]
         })
         st.dataframe(result_df, hide_index=True)
-
-    st.markdown("---")
-    if st.session_state.get('smr_events'):
-        st.markdown("##### 🔎 SMR 자동 분석 (단어 매칭)")
-        events = st.session_state['smr_events']
-        smr_df_data = {}
-        words = ["바닷가", "파도가", "무지개", "바둑이", "보트가", "버터구이", "포토카드", "부탁해", "돋보기", "빈대떡"]
-
-        for i, word in enumerate(words):
-            if i < len(events):
-                ev = events[i]
-                status = "🟢 양호" if ev['depth'] >= 20 else ("🟡 주의" if ev['depth'] >= 15 else "🔴 불량")
-                val = f"{ev['depth']:.1f}dB\n{status}"
-            else:
-                val = "미감지"
-            smr_df_data[word] = [val]
-
-        st.dataframe(pd.DataFrame(smr_df_data), use_container_width=True)
-
     st.markdown("---")
     st.subheader("3. 청지각 및 VHI-10 입력")
     cc1, cc2 = st.columns([1, 1.2])
@@ -1387,19 +1375,20 @@ if st.session_state.get('is_analyzed'):
         p_rate = st.slider("말속도", 0, 100, int(st.session_state.get("p_rate", 50)), key="p_rate")
     with cc2:
         st.markdown("#### 📝 VHI-10")
+        st.caption("0: 전혀 그렇지 않다 · 1: 거의 그렇지 않다 · 2: 가끔 그렇다 · 3: 자주 그렇다 · 4: 항상 그렇다")
         vhi_opts = [0, 1, 2, 3, 4]
 
         with st.expander("VHI-10 문항 입력 (클릭해서 펼치기)", expanded=True):
-            q1 = st.select_slider("1. 사람들이 내 목소리를 듣는데 어려움을 느낀다.", options=vhi_opts)
-            q2 = st.select_slider("2. 사람들이 내 말을 잘 못 알아들어 반복해야 한다.", options=vhi_opts)
-            q3 = st.select_slider("3. 낯선 사람들과 전화로 대화하는 것이 어렵다.", options=vhi_opts)
-            q4 = st.select_slider("4. 목소리 문제로 인해 긴장된다.", options=vhi_opts)
-            q5 = st.select_slider("5. 목소리 문제로 인해 사람들을 피하게 된다.", options=vhi_opts)
-            q6 = st.select_slider("6. 내 목소리 때문에 짜증이 난다.", options=vhi_opts)
-            q7 = st.select_slider("7. 목소리 문제로 수입에 지장이 있다.", options=vhi_opts)
-            q8 = st.select_slider("8. 내 목소리 문제로 대화가 제한된다.", options=vhi_opts)
-            q9 = st.select_slider("9. 내 목소리 때문에 소외감을 느낀다.", options=vhi_opts)
-            q10 = st.select_slider("10. 목소리를 내는 것이 힘들다.", options=vhi_opts)
+            q1 = st.radio("1. 사람들이 내 목소리를 듣는데 어려움을 느낀다.", vhi_opts, horizontal=True, key="vhi_q1")
+            q2 = st.radio("2. 사람들이 내 말을 잘 못 알아들어 반복해야 한다.", vhi_opts, horizontal=True, key="vhi_q2")
+            q3 = st.radio("3. 낯선 사람들과 전화로 대화하는 것이 어렵다.", vhi_opts, horizontal=True, key="vhi_q3")
+            q4 = st.radio("4. 목소리 문제로 인해 긴장된다.", vhi_opts, horizontal=True, key="vhi_q4")
+            q5 = st.radio("5. 목소리 문제로 인해 사람들을 피하게 된다.", vhi_opts, horizontal=True, key="vhi_q5")
+            q6 = st.radio("6. 내 목소리 때문에 짜증이 난다.", vhi_opts, horizontal=True, key="vhi_q6")
+            q7 = st.radio("7. 목소리 문제로 수입에 지장이 있다.", vhi_opts, horizontal=True, key="vhi_q7")
+            q8 = st.radio("8. 내 목소리 문제로 대화가 제한된다.", vhi_opts, horizontal=True, key="vhi_q8")
+            q9 = st.radio("9. 내 목소리 때문에 소외감을 느낀다.", vhi_opts, horizontal=True, key="vhi_q9")
+            q10 = st.radio("10. 목소리를 내는 것이 힘들다.", vhi_opts, horizontal=True, key="vhi_q10")
 
         vhi_f = q1 + q2 + q5 + q7 + q8
         vhi_p = q3 + q4 + q6
