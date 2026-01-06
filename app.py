@@ -413,21 +413,13 @@ except Exception:
 # [전역 설정] 폰트 및 변수
 # ==========================================
 FEATS_STEP1 = ["F0_Z", "Intensity", "SPS"]
+# Step1.5: 그레이존(p_PD가 경계 근처)에서만 VHI-10(총점)을 추가로 반영하는 보강 모델
+FEATS_STEP1_VHI = ["F0_Z", "Intensity", "SPS", "VHI_Total"]
+GRAYZONE_LOW = 0.40
+GRAYZONE_HIGH = 0.60
+
 FEATS_STEP2 = ['Intensity', 'SPS', 'P_Loudness', 'P_Rate', 'P_Artic']
 MIX_MARGIN_P = 0.10
-
-def sex_to_num(x):
-    """성별을 숫자 feature로 변환: 남/M=1.0, 여/F=0.0, 그 외/결측=0.5"""
-    if x is None:
-        return 0.5
-    s = str(x).strip().lower()
-    if s in ["m", "male", "man", "남", "남성", "남자", "1"]:
-        return 1.0
-    if s in ["f", "female", "woman", "여", "여성", "여자", "0"]:
-        return 0.0
-    return 0.5
-
-F0Z_STATS = None
 
 def _compute_f0z_stats(df: pd.DataFrame):
     def _safe_mu_sd(arr):
@@ -823,11 +815,11 @@ def train_models(cache_buster: str = "v28_7_0"):
             raw = pd.read_csv(io.StringIO(TRAINING_DATA_CSV_EMBED), encoding='utf-8-sig')
     except Exception as e:
         MODEL_LOAD_ERROR = f"training_data 로드 실패: {type(e).__name__}: {e}"
-        return None, None
+        return None, None, None
 
     if '진단결과 (Label)' not in raw.columns:
         MODEL_LOAD_ERROR = "training_data에 '진단결과 (Label)' 컬럼이 없습니다."
-        return None, None
+        return None, None, None
 
     try:
         F0Z_STATS = _compute_f0z_stats(raw)
@@ -844,10 +836,10 @@ def train_models(cache_buster: str = "v28_7_0"):
             return "Parkinson", "말속도 집단"
         if 'pd_articulation' in s or 'pd_artic' in s:
             return "Parkinson", "조음 집단"
-        return None, None
+        return None, None, None
 
     # ---------- Step1 ----------
-    X1_rows, y1 = [], []
+    X1_rows, X1_rows_vhi, y1 = [], [], []
     sex_list = []
     range_list = []
     f0_raw_list = []
@@ -862,13 +854,28 @@ def train_models(cache_buster: str = "v28_7_0"):
         range_val = row.get('Range', np.nan)
         f0_z = _f0_to_z(f0_raw, sex_num)
 
-        X1_rows.append([f0_z, row.get('강도(dB)', np.nan), row.get('SPS', np.nan)])
+        db = row.get('강도(dB)', np.nan)
+        sps = row.get('SPS', np.nan)
+
+        # Step1 기본(음향 3변수)
+        X1_rows.append([f0_z, db, sps])
+
+        # Step1.5 보강용(VHI-10 스케일로 정규화된 총점)
+        vhi_total10, _vp, _vf, _ve = vhi30_to_vhi10(
+            row.get('VHI총점', np.nan),
+            row.get('VHI_신체', np.nan),
+            row.get('VHI_기능', np.nan),
+            row.get('VHI_정서', np.nan),
+        )
+        X1_rows_vhi.append([f0_z, db, sps, vhi_total10])
+
         sex_list.append(sex_num)
         range_list.append(range_val)
         f0_raw_list.append(f0_raw)
         y1.append(diag)
 
     X1 = np.array(X1_rows, dtype=float)
+    X1_vhi = np.array(X1_rows_vhi, dtype=float)
 
     # Step1 학습 데이터 기반 기준값(가드/해석용)
     try:
@@ -959,6 +966,14 @@ def train_models(cache_buster: str = "v28_7_0"):
     ])
     model_step1.fit(X1, y1)
 
+    # Step1.5 보강(그레이존에서만 사용): VHI-10 총점까지 포함한 로지스틱 회귀
+    model_step1_vhi = Pipeline([
+        ("imp", SimpleImputer(strategy="median")),
+        ("sc", StandardScaler()),
+        ("clf", LogisticRegression(max_iter=4000, class_weight="balanced"))
+    ])
+    model_step1_vhi.fit(X1_vhi, y1)
+
     # ---------- Step2 (PD only) ----------
     X2_rows, y2 = [], []
     for _, row in raw.iterrows():
@@ -985,13 +1000,13 @@ def train_models(cache_buster: str = "v28_7_0"):
     ])
     model_step2.fit(X2, y2)
 
-    return model_step1, model_step2
+    return model_step1, model_step1_vhi, model_step2
 
 try:
-    model_step1, model_step2 = train_models("v28_7_0")
+    model_step1, model_step1_vhi, model_step2 = train_models("v29_0_0")
 except Exception as e:
     MODEL_LOAD_ERROR = f"모델 학습 중 예외: {type(e).__name__}: {e}"
-    model_step1, model_step2 = None, None
+    model_step1, model_step1_vhi, model_step2 = None, None, None
 
 try:
     _tp = get_training_file()
@@ -1513,6 +1528,49 @@ if st.session_state.get('is_analyzed'):
                 p_norm = float(proba_1[classes_1.index("Normal")])
             else:
                 p_norm = 1.0 - p_pd
+
+            # -------------------------
+            # Step1.5: 그레이존에서만 VHI-10 총점을 추가 반영
+            # - training_data의 VHI-30은 학습 시 VHI-10 스케일(0~40)로 정규화됨
+            # - 앱 입력 VHI-10(0~40)을 그대로 사용
+            # -------------------------
+            p_pd_base = float(p_pd)
+            p_norm_base = float(p_norm)
+            vhi_blend_applied = False
+            p_pd_vhi = None
+            w_vhi = 0.0
+
+            try:
+                if (model_step1_vhi is not None) and (GRAYZONE_LOW <= p_pd_base <= GRAYZONE_HIGH):
+                    vhi10_total = float(vhi_now) if np.isfinite(vhi_now) else 0.0
+                    input_1_vhi = pd.DataFrame([[f0_z_in, db_used, sps_used, vhi10_total]], columns=FEATS_STEP1_VHI)
+
+                    proba_1v = model_step1_vhi.predict_proba(input_1_vhi.to_numpy())[0]
+                    classes_1v = list(model_step1_vhi.classes_)
+                    if "Parkinson" in classes_1v:
+                        p_pd_vhi = float(proba_1v[classes_1v.index("Parkinson")])
+                    else:
+                        p_pd_vhi = float(proba_1v[-1])
+                    p_pd_vhi = max(0.0, min(1.0, p_pd_vhi))
+
+                    # 0.5에 가까울수록 VHI 보강 비중을 키우고, 경계(0.40/0.60)에서는 0으로
+                    half = (GRAYZONE_HIGH - GRAYZONE_LOW) / 2.0
+                    denom = half if half > 1e-6 else 0.10
+                    w_vhi = 1.0 - (abs(p_pd_base - 0.50) / denom)
+                    w_vhi = float(max(0.0, min(1.0, w_vhi)))
+
+                    p_pd = (1.0 - w_vhi) * p_pd_base + w_vhi * p_pd_vhi
+                    p_pd = float(max(0.0, min(1.0, p_pd)))
+                    p_norm = 1.0 - p_pd
+                    vhi_blend_applied = (w_vhi > 0.0)
+
+                    if vhi_blend_applied:
+                        st.info(
+                            f"그레이존(예: p_PD {GRAYZONE_LOW:.2f}~{GRAYZONE_HIGH:.2f}) 구간이어서 VHI-10(총점)을 보강 반영했습니다. "
+                            f"(기본 p_PD={p_pd_base*100:.1f}%, VHI보강 p_PD={p_pd_vhi*100:.1f}%, 가중치={w_vhi:.2f})"
+                        )
+            except Exception:
+                pass
 
             prob_normal = p_norm * 100.0
 
