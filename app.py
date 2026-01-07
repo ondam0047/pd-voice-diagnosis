@@ -534,6 +534,50 @@ def get_training_file():
 
     return None
 
+
+def sex_to_num(sex_value):
+    """Map sex/gender labels to numeric code used for normalization.
+
+    Returns:
+        1.0 for male, 0.0 for female, np.nan for unknown.
+    Accepts common Korean/English labels and numeric inputs.
+    """
+    if sex_value is None:
+        return np.nan
+    # If already numeric
+    try:
+        if isinstance(sex_value, (int, float, np.integer, np.floating)):
+            v = float(sex_value)
+            # allow either 0/1 or 1/2 conventions
+            if v in (0.0, 1.0):
+                return 1.0 if v == 1.0 else 0.0
+            if v in (1.0, 2.0):
+                # 1=male,2=female (common)
+                return 1.0 if v == 1.0 else 0.0
+    except Exception:
+        pass
+
+    s = str(sex_value).strip().lower()
+
+    # Korean
+    if s in ("남", "남자", "남성", "m", "male", "man", "boy"):
+        return 1.0
+    if s in ("여", "여자", "여성", "f", "female", "woman", "girl"):
+        return 0.0
+
+    # Sometimes contains words
+    if "남" in s and "여" not in s:
+        return 1.0
+    if "여" in s and "남" not in s:
+        return 0.0
+    if "male" in s and "fe" not in s:
+        return 1.0
+    if "female" in s:
+        return 0.0
+
+    return np.nan
+
+
 def vhi30_to_vhi10(vhi_total_30, vhi_p_30=None, vhi_f_30=None, vhi_e_30=None):
     """Convert VHI-30 scores to an approximate VHI-10 scale.
 
