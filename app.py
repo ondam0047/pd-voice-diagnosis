@@ -494,7 +494,13 @@ def _f0_to_z(f0_value, sex_num):
 MODEL_LOAD_ERROR = ""
 
 def get_training_file():
+    # 1) Script directory (Streamlit Cloud repo typically runs from here)
     base = Path(__file__).resolve().parent
+    # 2) Current working directory (sometimes differs from __file__ dir)
+    cwd = Path.cwd().resolve()
+    # 3) Common dev/test mount path
+    mnt = Path("/mnt/data")
+
     candidates = [
         base / "training_data.xlsx",
         base / "training_data.csv",
@@ -502,15 +508,74 @@ def get_training_file():
         base / "Training_data.csv",
         base / "TRAINING_DATA.xlsx",
         base / "TRAINING_DATA.csv",
+        cwd / "training_data.xlsx",
+        cwd / "training_data.csv",
+        cwd / "Training_data.xlsx",
+        cwd / "Training_data.csv",
+        mnt / "training_data.xlsx",
+        mnt / "training_data.csv",
     ]
     for p in candidates:
-        if p.exists():
-            return p
-    for p in base.rglob("training_data.csv"):
-        return p
-    for p in base.rglob("training_data.xlsx"):
-        return p
+        try:
+            if p.exists():
+                return p
+        except Exception:
+            pass
+
+    # Recursive search within repo (base, then cwd)
+    for root in [base, cwd]:
+        try:
+            for p in root.rglob("training_data.csv"):
+                return p
+            for p in root.rglob("training_data.xlsx"):
+                return p
+        except Exception:
+            continue
+
     return None
+
+def vhi30_to_vhi10(vhi_total_30, vhi_p_30=None, vhi_f_30=None, vhi_e_30=None):
+    """Convert VHI-30 scores to an approximate VHI-10 scale.
+
+    - VHI-30 total range: 0–120 (30 items × 0–4)
+    - VHI-10 total range: 0–40 (10 items × 0–4)
+
+    Because the training set contains VHI-30 (total/subscales) while the app collects VHI-10,
+    we linearly rescale VHI-30 scores to the VHI-10 range:
+
+        VHI10_total ≈ VHI30_total / 3
+
+    Returns:
+        (vhi10_total, vhi10_p, vhi10_f, vhi10_e)  # subscales are rescaled similarly (0–40 -> 0–13.33)
+    """
+    def _to_float(x):
+        try:
+            return float(x)
+        except Exception:
+            return np.nan
+
+    total30 = _to_float(vhi_total_30)
+    p30 = _to_float(vhi_p_30)
+    f30 = _to_float(vhi_f_30)
+    e30 = _to_float(vhi_e_30)
+
+    # If total is missing but subscales exist, reconstruct total.
+    if not np.isfinite(total30):
+        subs = [p30, f30, e30]
+        if any(np.isfinite(s) for s in subs):
+            total30 = np.nansum(subs)
+
+    # Linear rescale (0–120 -> 0–40)
+    total10 = total30 / 3.0 if np.isfinite(total30) else np.nan
+    total10 = float(np.clip(total10, 0.0, 40.0)) if np.isfinite(total10) else np.nan
+
+    # Subscales (0–40 -> 0–13.33) are not used for VHI-10 scoring, but returned for completeness
+    p10 = p30 / 3.0 if np.isfinite(p30) else np.nan
+    f10 = f30 / 3.0 if np.isfinite(f30) else np.nan
+    e10 = e30 / 3.0 if np.isfinite(e30) else np.nan
+
+    return total10, p10, f10, e10
+
 
 @st.cache_resource
 def _youden_cutoff(y_true, scores):
@@ -801,7 +866,7 @@ setup_korean_font()
 # ==========================================
 
 @st.cache_resource
-def train_models(cache_buster: str = "v28_8_0"):
+def train_models(cache_buster: str = "v30_0_0"):
     global MODEL_LOAD_ERROR, F0Z_STATS, STATS_STEP1
 
     training_path = get_training_file()
@@ -1015,7 +1080,7 @@ def train_models(cache_buster: str = "v28_8_0"):
     return model_step1, model_step1_vhi, model_step2
 
 try:
-    model_step1, model_step1_vhi, model_step2 = train_models("v29_0_0")
+    model_step1, model_step1_vhi, model_step2 = train_models("v30_0_0")
 except Exception as e:
     MODEL_LOAD_ERROR = f"모델 학습 중 예외: {type(e).__name__}: {e}"
     model_step1, model_step1_vhi, model_step2 = None, None, None
@@ -1411,11 +1476,11 @@ if st.session_state.get('is_analyzed'):
     cc1, cc2 = st.columns([1, 1.2])
     with cc1:
         st.markdown("#### 🔊 청지각 평가")
-        p_artic = st.slider("조음 정확도", 0, 100, int(st.session_state.get("p_artic", 50)), key="p_artic")
-        p_pitch = st.slider("음도", 0, 100, int(st.session_state.get("p_pitch", 50)), key="p_pitch")
-        p_prange = st.slider("음도 범위", 0, 100, int(st.session_state.get("p_prange", 50)), key="p_prange")
-        p_loud = st.slider("강도", 0, 100, int(st.session_state.get("p_loud", 50)), key="p_loud")
-        p_rate = st.slider("말속도", 0, 100, int(st.session_state.get("p_rate", 50)), key="p_rate")
+        p_artic = st.slider("조음 정확도", 0, 100, int(st.session_state.get("p_artic", 0)), key="p_artic")
+        p_pitch = st.slider("음도", 0, 100, int(st.session_state.get("p_pitch", 0)), key="p_pitch")
+        p_prange = st.slider("음도 범위", 0, 100, int(st.session_state.get("p_prange", 0)), key="p_prange")
+        p_loud = st.slider("강도", 0, 100, int(st.session_state.get("p_loud", 0)), key="p_loud")
+        p_rate = st.slider("말속도", 0, 100, int(st.session_state.get("p_rate", 0)), key="p_rate")
     with cc2:
         st.markdown("#### 📝 VHI-10")
         st.caption("0 전혀 그렇지 않다. 1 거의 그렇지 않다. 2 가끔 그렇다. 3 자주 그렇다. 4 항상 그렇다")
@@ -1467,6 +1532,8 @@ if st.session_state.get('is_analyzed'):
     if st.button("🚀 진단 결과 확인", key="btn_diag"):
         if not model_step1:
             st.error("Step1 모델이 준비되지 않았습니다. training_data 로드/학습을 확인하세요.")
+            if MODEL_LOAD_ERROR:
+                st.caption(f"모델 로드/학습 오류: {MODEL_LOAD_ERROR}")
         else:
             pd_cut = 0.50
             p_pd = 0.0
