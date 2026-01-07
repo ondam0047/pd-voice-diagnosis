@@ -1288,6 +1288,73 @@ def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
     except Exception:
         return None, 0, 0, 0
 
+def suggest_speech_window(sound: 'parselmouth.Sound',
+                         time_step: float = 0.01,
+                         thr_drop_db: float = 25.0,
+                         pad: float = 0.05):
+    """무음 구간을 대략 제거하기 위한 자동 시작/종료(초) 추천.
+    - intensity(dB)에서 최고값 대비 thr_drop_db 만큼 낮은 지점을 임계값으로 잡고,
+      임계값 이상 구간 중 가장 긴 연속 구간을 선택한다.
+    """
+    try:
+        dur = float(sound.duration)
+        if dur <= 0:
+            return 0.0, 0.0, False
+        intensity = sound.to_intensity(time_step=time_step)
+        vals = np.array(intensity.values[0], dtype=float)
+        # 시간축 생성
+        try:
+            times = np.array(intensity.xs(), dtype=float)
+        except Exception:
+            times = intensity.xmin + np.arange(len(vals)) * float(intensity.dx)
+
+        mask = np.isfinite(vals)
+        vals = vals[mask]
+        times = times[mask]
+        if len(vals) < 3:
+            return 0.0, dur, False
+
+        vmax = float(np.nanmax(vals))
+        thr = vmax - float(thr_drop_db)
+        above = vals >= thr
+
+        # 연속 구간 찾기
+        best_len = 0
+        best_i = None
+        i = 0
+        n = len(above)
+        while i < n:
+            if not above[i]:
+                i += 1
+                continue
+            j = i
+            while j < n and above[j]:
+                j += 1
+            seg_len = j - i
+            if seg_len > best_len:
+                best_len = seg_len
+                best_i = (i, j - 1)
+            i = j
+
+        if not best_i or best_len < 3:
+            return 0.0, dur, False
+
+        s = float(times[best_i[0]]) - pad
+        e = float(times[best_i[1]]) + pad
+        s = max(0.0, min(s, dur))
+        e = max(0.0, min(e, dur))
+        if e <= s:
+            return 0.0, dur, False
+        return s, e, True
+    except Exception:
+        # 실패 시 전체 구간
+        try:
+            return 0.0, float(sound.duration), False
+        except Exception:
+            return 0.0, 0.0, False
+
+
+
 def run_analysis_logic(file_path, gender=None):
     try:
         g = (gender or "").strip().upper()
@@ -1300,13 +1367,18 @@ def run_analysis_logic(file_path, gender=None):
 
         fig, f0, rng, dur = plot_pitch_contour_plotly(file_path, f0_min, f0_max)
         sound = parselmouth.Sound(file_path)
+        # 자동 말속도 구간 추천(무음 제거)
+        s_sugg, e_sugg, ok_sugg = suggest_speech_window(sound)
+        st.session_state['sps_suggest_start'] = float(s_sugg)
+        st.session_state['sps_suggest_end'] = float(e_sugg)
+        st.session_state['sps_has_suggest'] = bool(ok_sugg)
         intensity = sound.to_intensity()
         mean_db = call(intensity, "Get mean", 0, 0, "energy")
         sps = st.session_state.user_syllables / dur if dur > 0 else 0
 
         st.session_state.update({
             'f0_mean': f0, 'pitch_range': rng, 'mean_db': mean_db,
-            'sps': sps, 'duration': dur, 'fig_plotly': fig,
+            'sps': sps, 'duration': dur, 'sps_start': 0.0, 'sps_end': dur, 'sps_final': sps, 'fig_plotly': fig,
             'is_analyzed': True, 'is_saved': False
         })
         return True
@@ -1464,7 +1536,19 @@ if st.session_state.get('is_analyzed'):
     c1, c2 = st.columns([2, 1])
 
     with c1:
-        st.plotly_chart(st.session_state['fig_plotly'], use_container_width=True)
+        fig_show = st.session_state.get('fig_plotly')
+        if fig_show is not None:
+            try:
+                fig_show = go.Figure(fig_show)
+                # 말속도 선택 구간을 컨투어에 표시(시작/종료 세로선)
+                s_line = float(st.session_state.get('sps_start', 0.0))
+                e_line = float(st.session_state.get('sps_end', 0.0))
+                fig_show.add_vline(x=s_line, line_dash="dash")
+                fig_show.add_vline(x=e_line, line_dash="dash")
+                fig_show.update_layout(height=360)
+            except Exception:
+                pass
+        st.plotly_chart(fig_show, use_container_width=True)
 
     with c2:
         INTENSITY_CORR_DB_DEFAULT = 0.0
@@ -1502,17 +1586,60 @@ if st.session_state.get('is_analyzed'):
         final_db = float(st.session_state['mean_db']) + float(db_adj)
         range_adj = st.slider("음도범위(Hz) 보정", 0.0, 300.0, float(st.session_state['pitch_range']))
 
-        s_time, e_time = st.slider(
-            "말속도 구간(초)", 0.0, float(st.session_state['duration']),
-            st.session_state.get('sps_window', (0.0, float(st.session_state['duration']))),
-            0.01, key="sps_window_slider"
-        )
+        # 말속도(SPS) 산출에 사용할 구간(초) 선택 (수동 입력)
+        dur_total = float(st.session_state['duration'])
+        if 'sps_start' not in st.session_state:
+            st.session_state['sps_start'] = 0.0
+        if 'sps_end' not in st.session_state:
+            st.session_state['sps_end'] = dur_total
+
+        # --- 말속도 구간(초): 자동 추천 + 정밀 입력 ---
+        sugg_start = float(st.session_state.get('sps_suggest_start', 0.0))
+        sugg_end = float(st.session_state.get('sps_suggest_end', dur_total))
+        has_sugg = bool(st.session_state.get('sps_has_suggest', False))
+
+        cbtn1, cbtn2, _ = st.columns([1.3, 2.7, 2.0])
+        with cbtn1:
+            if st.button("🔍 무음 제거 자동 구간", key="btn_sps_auto"):
+                if has_sugg:
+                    st.session_state['sps_start'] = sugg_start
+                    st.session_state['sps_end'] = sugg_end
+                    st.toast(f"자동 구간 적용: {sugg_start:.2f}–{sugg_end:.2f}초", icon="✅")
+                else:
+                    st.toast("자동 구간을 계산할 수 없었습니다(무음/잡음). 수동으로 조정해 주세요.", icon="⚠️")
+        with cbtn2:
+            if has_sugg:
+                st.caption(f"자동 추천: {sugg_start:.2f}–{sugg_end:.2f}초 (무음 제거)")
+            else:
+                st.caption("자동 추천: 계산 불가(신호 약함/무음)")
+
+        sc1, sc2, sc3 = st.columns([1.2, 1.2, 1.6])
+        with sc1:
+            s_time = st.number_input("말속도 시작(초)", 0.0, dur_total, float(st.session_state.get('sps_start', 0.0)), 0.01, key="sps_start")
+        with sc2:
+            e_time = st.number_input("말속도 종료(초)", 0.0, dur_total, float(st.session_state.get('sps_end', dur_total)), 0.01, key="sps_end")
+        with sc3:
+            st.markdown("**미세 조정**")
+            b1, b2 = st.columns(2)
+            with b1:
+                if st.button("시작 -0.1", key="btn_sps_s_m01"):
+                    st.session_state['sps_start'] = max(0.0, float(s_time) - 0.1)
+                if st.button("시작 +0.1", key="btn_sps_s_p01"):
+                    st.session_state['sps_start'] = min(dur_total, float(s_time) + 0.1)
+            with b2:
+                if st.button("종료 -0.1", key="btn_sps_e_m01"):
+                    st.session_state['sps_end'] = max(0.0, float(e_time) - 0.1)
+                if st.button("종료 +0.1", key="btn_sps_e_p01"):
+                    st.session_state['sps_end'] = min(dur_total, float(e_time) + 0.1)
+
+        if float(e_time) <= float(s_time):
+            st.warning("말속도 구간의 종료(초)는 시작(초)보다 커야 합니다. 자동으로 최소 0.1초로 계산합니다.")
         st.session_state['sps_window'] = (float(s_time), float(e_time))
-        st.caption("※ 말속도 구간을 바꾸면 SPS(표)는 즉시 바뀝니다. 최종 확률/문구는 [🚀 진단 결과 확인]을 다시 눌러 갱신하세요.")
+        st.info(f"선택 구간: {float(s_time):.2f}–{float(e_time):.2f}초 (길이 {max(0.0, float(e_time)-float(s_time)):.2f}초)")
+        st.caption("※ 시작/종료(초)를 바꾸면 SPS(표)는 즉시 바뀝니다. 최종 확률/문구는 [🚀 진단 결과 확인]을 다시 눌러 갱신하세요.")
         sel_dur = max(0.1, float(e_time) - float(s_time))
         final_sps = float(st.session_state.user_syllables) / sel_dur
         st.session_state['sps_final'] = float(final_sps)
-
         st.write("#### 📊 음향학적 분석 결과")
         result_df = pd.DataFrame({
             "항목": ["평균 강도(dB)", "평균 음도(Hz)", "음도 범위(Hz)", "말속도(SPS)"],
