@@ -1365,7 +1365,7 @@ TEMP_FILENAME = "temp_for_analysis.wav"
 
 with col_rec:
     st.markdown("#### 🎙️ 마이크 녹음")
-    font_size = st.slider("🔍 글자 크기", 15, 50, 28, key="fs_read")
+    font_size = st.slider("🔍 글자 크기", 15, 50, 27, key="fs_read")
 
     # --- 낭독 문단(고정) ---
     def _count_syllables(text: str) -> int:
