@@ -1757,7 +1757,52 @@ if st.session_state.get('is_analyzed'):
                 pred_sub = model_step2.predict(input_2.to_numpy())[0]
                 pred_prob = float(probs_sub[sub_classes.index(pred_sub)]) if pred_sub in sub_classes else float(np.max(probs_sub))
 
-                pairs = sorted(zip(sub_classes, probs_sub), key=lambda x: float(x[1]), reverse=True)
+                
+# --- 임상 보정(청지각 기반): 조음/강도/말속도 극단값이 있을 때 '혼합형' 가능성을 반영 ---
+# 기본값 0은 "미입력"으로 취급(슬라이더가 0에서 시작하므로), 0보다 큰 값만 입력으로 간주
+probs_use = np.array(probs_sub, dtype=float)
+
+try:
+    p_artic_in = float(p_artic) if p_artic is not None else 0.0
+    p_loud_in  = float(p_loud)  if p_loud  is not None else 0.0
+    p_rate_in  = float(p_rate)  if p_rate  is not None else 0.0
+except Exception:
+    p_artic_in, p_loud_in, p_rate_in = 0.0, 0.0, 0.0
+
+any_perc_entered = (p_artic_in > 0.0) or (p_loud_in > 0.0) or (p_rate_in > 0.0)
+
+if any_perc_entered:
+    # 임계값(필요 시 조정)
+    ARTIC_LOW_THR = 40.0   # 조음정확도(0~100, 높을수록 좋음) : 40 이하이면 조음 문제 신호
+    LOUD_LOW_THR  = 35.0   # 강도(0~100, 높을수록 큼) : 35 이하이면 hypophonia 신호
+    RATE_HIGH_THR = 70.0   # 말속도(0~100, 높을수록 빠름) : 70 이상이면 fast rate 신호
+
+    # 클래스 인덱스 찾기(훈련 라벨이 '강도 집단/말속도 집단/조음 집단' 형태)
+    idx_int = sub_classes.index("강도 집단") if "강도 집단" in sub_classes else None
+    idx_rate = sub_classes.index("말속도 집단") if "말속도 집단" in sub_classes else None
+    idx_art = sub_classes.index("조음 집단") if "조음 집단" in sub_classes else None
+
+    boosts = np.zeros_like(probs_use, dtype=float)
+
+    # 조음 정확도 낮음 → 조음 집단 확률 완만하게 상향
+    if (idx_art is not None) and (p_artic_in > 0.0) and (p_artic_in <= ARTIC_LOW_THR):
+        boosts[idx_art] += (ARTIC_LOW_THR - p_artic_in) / ARTIC_LOW_THR * 0.35  # 최대 +0.35
+
+    # 강도 낮음 → 강도 집단 확률 상향
+    if (idx_int is not None) and (p_loud_in > 0.0) and (p_loud_in <= LOUD_LOW_THR):
+        boosts[idx_int] += (LOUD_LOW_THR - p_loud_in) / LOUD_LOW_THR * 0.25  # 최대 +0.25
+
+    # 말속도 빠름 → 말속도 집단 확률 상향
+    if (idx_rate is not None) and (p_rate_in > 0.0) and (p_rate_in >= RATE_HIGH_THR):
+        boosts[idx_rate] += (p_rate_in - RATE_HIGH_THR) / (100.0 - RATE_HIGH_THR) * 0.25  # 최대 +0.25
+
+    if float(np.sum(boosts)) > 0.0:
+        probs_use = probs_use + boosts
+        s = float(np.sum(probs_use))
+        if s > 0:
+            probs_use = probs_use / s
+
+                pairs = sorted(zip(sub_classes, probs_use), key=lambda x: float(x[1]), reverse=True)
                 top1_lbl, top1_p = pairs[0][0], float(pairs[0][1])
                 top2_lbl, top2_p = (pairs[1][0], float(pairs[1][1])) if len(pairs) > 1 else (None, 0.0)
 
@@ -1768,12 +1813,12 @@ if st.session_state.get('is_analyzed'):
                     st.info(f"➡️ 하위집단 예측: **혼합형** ({top1_lbl} {top1_p*100:.1f}%, {top2_lbl} {top2_p*100:.1f}%)")
                     final_decision = f"혼합형({top1_lbl} 우세)"
                 else:
-                    st.info(f"➡️ 하위집단 예측: **{pred_sub}** ({pred_prob*100:.1f}%)")
-                    final_decision = str(pred_sub)
+                    st.info(f"➡️ 하위집단 예측: **{top1_lbl}** ({top1_p*100:.1f}%)")
+                    final_decision = str(top1_lbl)
 
                 # 🕸️ 하위집단 확률 스파이더 차트 (축 라벨에 확률 표시)
                 try:
-                    vals = [float(p) * 100 for p in probs_sub]
+                    vals = [float(p) * 100 for p in probs_use]
                     labels = [f"{lbl} ({val:.1f}%)" for lbl, val in zip(sub_classes, vals)]
                     fig_sub = go.Figure()
                     fig_sub.add_trace(go.Scatterpolar(r=vals, theta=labels, fill='toself'))
