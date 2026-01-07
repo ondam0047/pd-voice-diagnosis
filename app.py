@@ -418,6 +418,13 @@ FEATS_STEP1_VHI = ["F0_Z", "Intensity", "SPS", "VHI_Total"]
 GRAYZONE_LOW = 0.40
 GRAYZONE_HIGH = 0.60
 
+
+# Step1.5 (VHI-10 보강) 추가 트리거(청지각 위험 신호)
+# - 청지각 점수 슬라이더는 기본값 0이므로, "입력됨"은 (5개 중 하나라도 0보다 큰 값)으로 판단합니다.
+# - 아래 임계값은 훈련데이터 내부검증에서 민감하게 작동한 값(초안)입니다.
+PERCEPTUAL_TRIGGER_ARTIC = 55   # 조음 정확도(0~100): 낮을수록 나쁨
+PERCEPTUAL_TRIGGER_LOUD  = 40   # 강도(0~100): 낮을수록 나쁨
+PERCEPTUAL_TRIGGER_RATE  = 65   # 말속도(0~100): 높을수록 빠름(빠르면 위험 신호로 취급)
 FEATS_STEP2 = ['Intensity', 'SPS', 'P_Loudness', 'P_Rate', 'P_Artic']
 MIX_MARGIN_P = 0.10
 
@@ -1592,10 +1599,46 @@ if st.session_state.get('is_analyzed'):
                 vhi_now = float(st.session_state.get('vhi_total', 0.0) or 0.0)
             except Exception:
                 vhi_now = 0.0
+            # 청지각 점수(기본 0 시작)
             try:
                 artic_now = float(st.session_state.get('p_artic', 0.0) or 0.0)
             except Exception:
                 artic_now = 0.0
+            try:
+                loud_now = float(st.session_state.get('p_loud', 0.0) or 0.0)
+            except Exception:
+                loud_now = 0.0
+            try:
+                rate_now = float(st.session_state.get('p_rate', 0.0) or 0.0)
+            except Exception:
+                rate_now = 0.0
+            try:
+                pitch_now = float(st.session_state.get('p_pitch', 0.0) or 0.0)
+            except Exception:
+                pitch_now = 0.0
+            try:
+                prange_now = float(st.session_state.get('p_prange', 0.0) or 0.0)
+            except Exception:
+                prange_now = 0.0
+
+            # 청지각 점수 입력 여부: 5개 중 하나라도 0보다 크면 "입력됨"으로 판단
+            perceptual_entered = any([
+                (artic_now > 0.0),
+                (loud_now > 0.0),
+                (rate_now > 0.0),
+                (pitch_now > 0.0),
+                (prange_now > 0.0),
+            ])
+
+            # 청지각 기반 Step1.5 강제 트리거
+            # - 조음 정확도 낮음 / 강도 낮음 / 말속도 빠름(청지각)이면 VHI-10 보강을 강제로 적용
+            force_vhi_by_perceptual = bool(
+                perceptual_entered and (
+                    (artic_now <= PERCEPTUAL_TRIGGER_ARTIC) or
+                    (loud_now <= PERCEPTUAL_TRIGGER_LOUD) or
+                    (rate_now >= PERCEPTUAL_TRIGGER_RATE)
+                )
+            )
 
             sex_is_m = str(subject_gender).strip().lower() in ['m', 'male', '남', '남성']
             sex_is_f = str(subject_gender).strip().lower() in ['f', 'female', '여', '여성']
@@ -1669,7 +1712,8 @@ if st.session_state.get('is_analyzed'):
             w_vhi = 0.0
 
             try:
-                if (model_step1_vhi is not None) and (GRAYZONE_LOW <= p_pd_base <= GRAYZONE_HIGH):
+                in_grayzone = (GRAYZONE_LOW <= p_pd_base <= GRAYZONE_HIGH)
+                if (model_step1_vhi is not None) and (in_grayzone or force_vhi_by_perceptual):
                     vhi10_total = float(vhi_now) if np.isfinite(vhi_now) else 0.0
                     input_1_vhi = pd.DataFrame([[f0_z_in, db_used, sps_used, vhi10_total]], columns=FEATS_STEP1_VHI)
 
@@ -1679,23 +1723,34 @@ if st.session_state.get('is_analyzed'):
                         p_pd_vhi = float(proba_1v[classes_1v.index("Parkinson")])
                     else:
                         p_pd_vhi = float(proba_1v[-1])
-                    p_pd_vhi = max(0.0, min(1.0, p_pd_vhi))
+                    p_pd_vhi = max(0.0, min(1.0, float(p_pd_vhi)))
 
-                    # 0.5에 가까울수록 VHI 보강 비중을 키우고, 경계(0.40/0.60)에서는 0으로
-                    half = (GRAYZONE_HIGH - GRAYZONE_LOW) / 2.0
-                    denom = half if half > 1e-6 else 0.10
-                    w_vhi = 1.0 - (abs(p_pd_base - 0.50) / denom)
-                    w_vhi = float(max(0.0, min(1.0, w_vhi)))
+                    # 가중치 결정:
+                    # - 청지각 위험 신호가 뚜렷하면(그레이존 밖) VHI-10 보강을 강제 적용(w=1)
+                    # - 그레이존에서는 0.5에 가까울수록 VHI 비중을 키움
+                    if force_vhi_by_perceptual and (not in_grayzone):
+                        w_vhi = 1.0
+                    else:
+                        half = (GRAYZONE_HIGH - GRAYZONE_LOW) / 2.0
+                        denom = half if half > 1e-6 else 0.10
+                        w_vhi = 1.0 - (abs(p_pd_base - 0.50) / denom)
+                        w_vhi = float(max(0.0, min(1.0, w_vhi)))
 
                     p_pd = (1.0 - w_vhi) * p_pd_base + w_vhi * p_pd_vhi
                     p_pd = float(max(0.0, min(1.0, p_pd)))
                     p_norm = 1.0 - p_pd
                     vhi_blend_applied = (w_vhi > 0.0)
 
-                    if vhi_blend_applied:
+                    if vhi_blend_applied and in_grayzone:
                         st.info(
                             f"그레이존(예: p_PD {GRAYZONE_LOW:.2f}~{GRAYZONE_HIGH:.2f}) 구간이어서 VHI-10(총점)을 보강 반영했습니다. "
                             f"(기본 p_PD={p_pd_base*100:.1f}%, VHI보강 p_PD={p_pd_vhi*100:.1f}%, 가중치={w_vhi:.2f})"
+                        )
+                    elif force_vhi_by_perceptual and (not in_grayzone):
+                        st.info(
+                            f"청지각 점수에서 위험 신호가 관찰되어 VHI-10(총점) 보강을 강제로 적용했습니다. "
+                            f"(조음≤{PERCEPTUAL_TRIGGER_ARTIC}, 강도≤{PERCEPTUAL_TRIGGER_LOUD}, 말속도≥{PERCEPTUAL_TRIGGER_RATE} 중 하나 해당) "
+                            f"| 기본 p_PD={p_pd_base*100:.1f}%, VHI보강 p_PD={p_pd_vhi*100:.1f}%"
                         )
             except Exception:
                 pass
