@@ -1187,7 +1187,7 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
             analysis['f0'], analysis['range'], analysis['db'], analysis['sps'],
             analysis['vhi_total'], analysis['vhi_p'], analysis['vhi_f'], analysis['vhi_e'],
             analysis['p_artic'], analysis['p_pitch'], analysis['p_loud'], analysis['p_rate'], analysis['p_prange'],
-            diagnosis['final'], diagnosis['normal_prob']
+            diagnosis.get('final',''), diagnosis.get('normal_prob','')
         ]
         worksheet.append_row(row_data)
 
@@ -1204,7 +1204,7 @@ def send_email_and_log_sheet(wav_path, patient_info, analysis, diagnosis):
 
         body = f"""
 환자: {patient_info['name']} ({patient_info['age']}/{patient_info['gender']})
-진단: {diagnosis['final']} ({diagnosis['normal_prob']:.1f}%)
+진단: {diagnosis.get('final','')}
 
 * 음성 파일이 첨부되었습니다. ({email_attach_name})
 * 상세 수치는 구글 시트에 저장되었습니다.
@@ -1284,9 +1284,19 @@ def plot_pitch_contour_plotly(sound_path, f0_min, f0_max):
         else:
             fig.update_layout(title="음도 컨투어 (감지된 음성 없음)", height=300)
 
-        return fig, mean_f0, rng, duration
+        # --- 음도 기반 발화 구간(말속도 구간) 추정 ---
+        # clean_t(이상치 제거 후) → 없으면 valid_times(0 아닌 음도) 사용
+        voiced_times = clean_t if (isinstance(clean_t, (list, np.ndarray)) and len(clean_t) > 0) else valid_times
+        has_voiced = isinstance(voiced_times, (list, np.ndarray)) and len(voiced_times) > 0
+        if has_voiced:
+            voiced_start = float(np.min(voiced_times))
+            voiced_end = float(np.max(voiced_times))
+        else:
+            voiced_start, voiced_end = 0.0, float(duration)
+
+        return fig, mean_f0, rng, duration, voiced_start, voiced_end, has_voiced
     except Exception:
-        return None, 0, 0, 0
+        return None, 0, 0, 0, 0.0, 0.0, False
 
 def suggest_speech_window(sound: 'parselmouth.Sound',
                          time_step: float = 0.01,
@@ -1355,6 +1365,7 @@ def suggest_speech_window(sound: 'parselmouth.Sound',
 
 
 
+
 def run_analysis_logic(file_path, gender=None):
     try:
         g = (gender or "").strip().upper()
@@ -1365,21 +1376,41 @@ def run_analysis_logic(file_path, gender=None):
         else:
             f0_min, f0_max = 70, 500
 
-        fig, f0, rng, dur = plot_pitch_contour_plotly(file_path, f0_min, f0_max)
+        fig, f0, rng, dur, pitch_start, pitch_end, has_pitch = plot_pitch_contour_plotly(file_path, f0_min, f0_max)
         sound = parselmouth.Sound(file_path)
-        # 자동 말속도 구간 추천(무음 제거)
-        s_sugg, e_sugg, ok_sugg = suggest_speech_window(sound)
-        st.session_state['sps_suggest_start'] = float(s_sugg)
-        st.session_state['sps_suggest_end'] = float(e_sugg)
-        st.session_state['sps_has_suggest'] = bool(ok_sugg)
+
+        # 음도 기반 발화 구간(말속도 구간) 기록
+        st.session_state['sps_pitch_start'] = float(pitch_start)
+        st.session_state['sps_pitch_end'] = float(pitch_end)
+        st.session_state['sps_has_pitch'] = bool(has_pitch)
+
         intensity = sound.to_intensity()
         mean_db = call(intensity, "Get mean", 0, 0, "energy")
-        sps = st.session_state.user_syllables / dur if dur > 0 else 0
+        dur_total = float(dur) if dur else float(sound.duration)
+        sps_base = st.session_state.user_syllables / dur_total if dur_total > 0 else 0.0
+
+        # 말속도 구간(초) 초기값을 "음도 감지 구간"으로 설정
+        if has_pitch and float(pitch_end) > float(pitch_start):
+            sps_start = float(pitch_start)
+            sps_end = float(pitch_end)
+            sps_final = float(st.session_state.user_syllables) / max(0.1, sps_end - sps_start)
+        else:
+            sps_start = 0.0
+            sps_end = float(dur_total)
+            sps_final = float(sps_base)
 
         st.session_state.update({
-            'f0_mean': f0, 'pitch_range': rng, 'mean_db': mean_db,
-            'sps': sps, 'duration': dur, 'sps_start': 0.0, 'sps_end': dur, 'sps_final': sps, 'fig_plotly': fig,
-            'is_analyzed': True, 'is_saved': False
+            'f0_mean': f0,
+            'pitch_range': rng,
+            'mean_db': mean_db,
+            'sps': float(sps_base),
+            'duration': float(dur_total),
+            'sps_start': float(sps_start),
+            'sps_end': float(sps_end),
+            'sps_final': float(sps_final),
+            'fig_plotly': fig,
+            'is_analyzed': True,
+            'is_saved': False
         })
         return True
     except Exception as e:
@@ -1689,313 +1720,86 @@ if st.session_state.get('is_analyzed'):
     st.subheader("4. 최종 진단 및 클라우드 전송")
 
     if st.button("🚀 진단 결과 확인", key="btn_diag"):
-        if not model_step1:
-            st.error("Step1 모델이 준비되지 않았습니다. training_data 로드/학습을 확인하세요.")
+        # PD 환자군 전용 모드: Step1(정상/PD) 판정은 생략하고, Step2(PD 하위집단)만 산출합니다.
+        if not model_step2:
+            st.error("Step2 모델이 준비되지 않았습니다. training_data 로드/학습을 확인하세요.")
             if MODEL_LOAD_ERROR:
                 st.caption(f"모델 로드/학습 오류: {MODEL_LOAD_ERROR}")
         else:
-            pd_cut = 0.50
-            p_pd = 0.0
-            p_norm = 1.0
+            # --- 입력값 수집 (보정값 우선) ---
+            final_db = _safe_float(st.session_state.get("db_adj", np.nan))
+            final_sps = _safe_float(st.session_state.get("sps_final", np.nan))
+            range_adj = _safe_float(locals().get("range_adj", st.session_state.get("pitch_range", np.nan)))
 
-            f0_in = _safe_float(st.session_state.get('f0_mean'))
-            pr_in = _safe_float(locals().get('range_adj', st.session_state.get('pitch_range')))
-            db_in = _safe_float(final_db)
-            sps_in = _safe_float(st.session_state.get('sps_final', final_sps))
+            # 청지각 점수(0~100): 기본값 0은 '미입력'일 수 있어, 모두 0이면 결측 처리(중앙값 대체)
+            p_loud = _safe_float(st.session_state.get("p_loud", 0.0))
+            p_rate = _safe_float(st.session_state.get("p_rate", 0.0))
+            p_artic = _safe_float(st.session_state.get("p_artic", 0.0))
+            perceptual_entered = any([(p_loud or 0) > 0, (p_rate or 0) > 0, (p_artic or 0) > 0])
+            if not perceptual_entered:
+                p_loud = np.nan
+                p_rate = np.nan
+                p_artic = np.nan
+                st.caption("ℹ️ 청지각 점수가 입력되지 않아(모두 0) Step2에서는 중앙값으로 보정해 반영합니다.")
 
-            try:
-                vhi_now = float(st.session_state.get('vhi_total', 0.0) or 0.0)
-            except Exception:
-                vhi_now = 0.0
-            # 청지각 점수(기본 0 시작)
-            try:
-                artic_now = float(st.session_state.get('p_artic', 0.0) or 0.0)
-            except Exception:
-                artic_now = 0.0
-            try:
-                loud_now = float(st.session_state.get('p_loud', 0.0) or 0.0)
-            except Exception:
-                loud_now = 0.0
-            try:
-                rate_now = float(st.session_state.get('p_rate', 0.0) or 0.0)
-            except Exception:
-                rate_now = 0.0
-            try:
-                pitch_now = float(st.session_state.get('p_pitch', 0.0) or 0.0)
-            except Exception:
-                pitch_now = 0.0
-            try:
-                prange_now = float(st.session_state.get('p_prange', 0.0) or 0.0)
-            except Exception:
-                prange_now = 0.0
+            # VHI-10 총점
+            vhi_total = float(st.session_state.get("vhi_total", 0.0) or 0.0)
+            vhi_p = float(st.session_state.get("vhi_p", 0.0) or 0.0)
+            vhi_f = float(st.session_state.get("vhi_f", 0.0) or 0.0)
+            vhi_e = float(st.session_state.get("vhi_e", 0.0) or 0.0)
 
-            # 청지각 점수 입력 여부: 5개 중 하나라도 0보다 크면 "입력됨"으로 판단
-            perceptual_entered = any([
-                (artic_now > 0.0),
-                (loud_now > 0.0),
-                (rate_now > 0.0),
-                (pitch_now > 0.0),
-                (prange_now > 0.0),
-            ])
-
-            # 청지각 기반 Step1.5 강제 트리거
-            # - 조음 정확도 낮음 / 강도 낮음 / 말속도 빠름(청지각)이면 VHI-10 보강을 강제로 적용
-            force_vhi_by_perceptual = bool(
-                perceptual_entered and (
-                    (artic_now <= PERCEPTUAL_TRIGGER_ARTIC) or
-                    (loud_now <= PERCEPTUAL_TRIGGER_LOUD) or
-                    (rate_now >= PERCEPTUAL_TRIGGER_RATE)
-                )
-            )
-
-            sex_is_m = str(subject_gender).strip().lower() in ['m', 'male', '남', '남성']
-            sex_is_f = str(subject_gender).strip().lower() in ['f', 'female', '여', '여성']
-
-            pr_used = float(pr_in) if (pr_in is not None and np.isfinite(pr_in)) else None
-            pr_raw = pr_used
-
-            sps_fast_thr = float(STATS_STEP1.get("sps_fast_thr", 5.8))
-
-
-            normal_context = (vhi_now <= 3.0) and (artic_now >= 70.0) and (db_in is not None and db_in >= 65.0) and (sps_in is not None and sps_in <= sps_fast_thr)
-
-            db_used = db_in
-            sps_used = sps_in
-            clamp_msgs = []
-            if isinstance(STATS_STEP1, dict):
-                db_p05 = float(STATS_STEP1.get("db_p05_norm", 65.0))
-                sps_p95 = float(STATS_STEP1.get("sps_p95_norm", 5.0))
-                sps_fast_thr = float(STATS_STEP1.get("sps_fast_thr", 5.8))
-                if normal_context and (db_in is not None) and (db_in < db_p05):
-                    db_used = db_p05
-                    clamp_msgs.append(f"평균 음성 강도(dB)가 정상 학습분포 하한(5퍼센타일≈{db_p05:.1f}dB)보다 낮아, 장비/환경 영향 가능성이 있어 모델 입력은 {db_used:.1f}dB로 보정했습니다. (오탐 방지)")
-                if normal_context and (sps_in is not None) and (sps_in > sps_p95) and (sps_in <= sps_fast_thr):
-                    sps_used = sps_p95
-                    clamp_msgs.append(f"말속도(SPS)가 정상 학습분포 상한(95퍼센타일≈{sps_p95:.2f})을 약간 초과해, 모델 입력은 {sps_used:.2f}로 완만히 보정했습니다. (오탐 방지)")
-            for _m in clamp_msgs:
-                st.info(_m)
-
-            if normal_context and pr_used is not None:
-                med_all = float(STATS_STEP1.get('median_range_all', 100.0))
-                med_m = float(STATS_STEP1.get('median_range_m', med_all))
-                med_f = float(STATS_STEP1.get('median_range_f', med_all))
-                med = med_m if sex_is_m else (med_f if sex_is_f else med_all)
-
-                if sex_is_m and pr_used < 70.0:
-                    pr_used = med
-                elif sex_is_f and pr_used < 90.0:
-                    pr_used = med
-                elif (not sex_is_m and not sex_is_f) and pr_used < 80.0:
-                    pr_used = med
+            # --- Step2: PD 하위집단 분류 ---
+            input_2 = pd.DataFrame([[final_db, final_sps, p_loud, p_rate, p_artic]], columns=FEATS_STEP2)
 
             try:
-                st.session_state['step1_range_raw'] = pr_raw
-                st.session_state['step1_range_used'] = pr_used
-                st.session_state['step1_range_guard'] = bool(normal_context and pr_raw is not None and pr_used != pr_raw)
-            except Exception:
-                pass
-
-            sex_num_ui = sex_to_num(subject_gender)
-            f0_z_in = _f0_to_z(f0_in, sex_num_ui)
-            input_1 = pd.DataFrame([[f0_z_in, db_used, sps_used]], columns=FEATS_STEP1)
-
-            proba_1 = model_step1.predict_proba(input_1.to_numpy())[0]
-            classes_1 = list(model_step1.classes_)
-            if "Parkinson" in classes_1:
-                p_pd = float(proba_1[classes_1.index("Parkinson")])
-            if "Normal" in classes_1:
-                p_norm = float(proba_1[classes_1.index("Normal")])
-            else:
-                p_norm = 1.0 - p_pd
-
-            # -------------------------
-            # Step1.5: 그레이존에서만 VHI-10 총점을 추가 반영
-            # - training_data의 VHI-30은 학습 시 VHI-10 스케일(0~40)로 정규화됨
-            # - 앱 입력 VHI-10(0~40)을 그대로 사용
-            # -------------------------
-            p_pd_base = float(p_pd)
-            p_norm_base = float(p_norm)
-            vhi_blend_applied = False
-            p_pd_vhi = None
-            w_vhi = 0.0
-
-            try:
-                in_grayzone = (GRAYZONE_LOW <= p_pd_base <= GRAYZONE_HIGH)
-                if (model_step1_vhi is not None) and (in_grayzone or force_vhi_by_perceptual):
-                    vhi10_total = float(vhi_now) if np.isfinite(vhi_now) else 0.0
-                    input_1_vhi = pd.DataFrame([[f0_z_in, db_used, sps_used, vhi10_total]], columns=FEATS_STEP1_VHI)
-
-                    proba_1v = model_step1_vhi.predict_proba(input_1_vhi.to_numpy())[0]
-                    classes_1v = list(model_step1_vhi.classes_)
-                    if "Parkinson" in classes_1v:
-                        p_pd_vhi = float(proba_1v[classes_1v.index("Parkinson")])
-                    else:
-                        p_pd_vhi = float(proba_1v[-1])
-                    p_pd_vhi = max(0.0, min(1.0, float(p_pd_vhi)))
-
-                    # 가중치 결정:
-                    # - 청지각 위험 신호가 뚜렷하면(그레이존 밖) VHI-10 보강을 강제 적용(w=1)
-                    # - 그레이존에서는 0.5에 가까울수록 VHI 비중을 키움
-                    if force_vhi_by_perceptual and (not in_grayzone):
-                        w_vhi = 1.0
-                    else:
-                        half = (GRAYZONE_HIGH - GRAYZONE_LOW) / 2.0
-                        denom = half if half > 1e-6 else 0.10
-                        w_vhi = 1.0 - (abs(p_pd_base - 0.50) / denom)
-                        w_vhi = float(max(0.0, min(1.0, w_vhi)))
-
-                    p_pd = (1.0 - w_vhi) * p_pd_base + w_vhi * p_pd_vhi
-                    p_pd = float(max(0.0, min(1.0, p_pd)))
-                    p_norm = 1.0 - p_pd
-                    vhi_blend_applied = (w_vhi > 0.0)
-
-                    if vhi_blend_applied and in_grayzone:
-                        st.info(
-                            f"그레이존(예: p_PD {GRAYZONE_LOW:.2f}~{GRAYZONE_HIGH:.2f}) 구간이어서 VHI-10(총점)을 보강 반영했습니다. "
-                            f"(기본 p_PD={p_pd_base*100:.1f}%, VHI보강 p_PD={p_pd_vhi*100:.1f}%, 가중치={w_vhi:.2f})"
-                        )
-                    elif force_vhi_by_perceptual and (not in_grayzone):
-                        st.info(
-                            f"청지각 점수에서 위험 신호가 관찰되어 VHI-10(총점) 보강을 강제로 적용했습니다. "
-                            f"(조음≤{PERCEPTUAL_TRIGGER_ARTIC}, 강도≤{PERCEPTUAL_TRIGGER_LOUD}, 말속도≥{PERCEPTUAL_TRIGGER_RATE} 중 하나 해당) "
-                            f"| 기본 p_PD={p_pd_base*100:.1f}%, VHI보강 p_PD={p_pd_vhi*100:.1f}%"
-                        )
-            except Exception:
-                pass
-
-            prob_normal = p_norm * 100.0
-
-            try:
-                if (subject_gender == "남") and (range_adj < 90) and (p_pd < (pd_cut + 0.07)):
-                    p_pd = max(0.0, p_pd - 0.07)
-                    prob_normal = (1.0 - p_pd) * 100.0
-            except Exception:
-                pass
-
-            # Step1 판정
-            if p_pd >= pd_cut:
-                kind, headline, band_code = step1_screening_band(p_pd, pd_cut)
-                if kind == "error":
-                    st.error(f"🔴 **{headline}**  | Normal={prob_normal:.1f}%  PD={p_pd*100:.1f}% (cut-off={pd_cut:.2f})")
-                elif kind == "warning":
-                    st.warning(f"🟡 **{headline}**  | Normal={prob_normal:.1f}%  PD={p_pd*100:.1f}% (cut-off={pd_cut:.2f})")
-                else:
-                    st.success(f"🟢 **{headline}**  | Normal={prob_normal:.1f}%  PD={p_pd*100:.1f}% (cut-off={pd_cut:.2f})")
-                final_decision = "Parkinson"
-            else:
-                kind, headline, band_code = step1_screening_band(p_pd, pd_cut)
-                if kind == "warning":
-                    st.warning(f"🟡 **{headline}**  | Normal={prob_normal:.1f}%  PD={p_pd*100:.1f}% (cut-off={pd_cut:.2f})")
-                elif kind == "error":
-                    st.error(f"🔴 **{headline}**  | Normal={prob_normal:.1f}%  PD={p_pd*100:.1f}% (cut-off={pd_cut:.2f})")
-                else:
-                    st.success(f"🟢 **{headline}**  | Normal={prob_normal:.1f}%  PD={p_pd*100:.1f}% (cut-off={pd_cut:.2f})")
-                final_decision = "Normal"
-
-            st.session_state.step1_band_code = band_code
-
-            # Step2 (PD로 판정된 경우)
-            if (final_decision == "Parkinson") and model_step2:
-                feat_map2 = {
-                    'Intensity': final_db,
-                    'SPS': final_sps,
-                    'P_Loudness': p_loud,
-                    'P_Rate': p_rate,
-                    'P_Artic': p_artic,
-                }
-                input_2 = pd.DataFrame([[feat_map2.get(c, None) for c in FEATS_STEP2]], columns=FEATS_STEP2)
-
                 probs_sub = model_step2.predict_proba(input_2.to_numpy())[0]
                 sub_classes = list(model_step2.classes_)
-                j = int(np.argmax(probs_sub))
-                pred_sub = sub_classes[j]
-                pred_prob = float(probs_sub[j])
+                pred_sub = model_step2.predict(input_2.to_numpy())[0]
+                pred_prob = float(probs_sub[sub_classes.index(pred_sub)]) if pred_sub in sub_classes else float(np.max(probs_sub))
 
-                # 혼합형 판단
-                _pairs = sorted(zip(sub_classes, probs_sub), key=lambda x: float(x[1]), reverse=True)
+                pairs = sorted(zip(sub_classes, probs_sub), key=lambda x: float(x[1]), reverse=True)
+                top1_lbl, top1_p = pairs[0][0], float(pairs[0][1])
+                top2_lbl, top2_p = (pairs[1][0], float(pairs[1][1])) if len(pairs) > 1 else (None, 0.0)
 
-                # 🕸️ PD 하위집단 확률 스파이더 차트(혼합형 확인용)
+                is_mixed = (top2_lbl is not None) and ((top1_p - top2_p) < MIX_MARGIN_P)
+
+                st.markdown("### 🧠 PD 하위집단 결과 (Step2)")
+                if is_mixed and top2_lbl is not None:
+                    st.info(f"➡️ 하위집단 예측: **혼합형** ({top1_lbl} {top1_p*100:.1f}%, {top2_lbl} {top2_p*100:.1f}%)")
+                    final_decision = f"혼합형({top1_lbl} 우세)"
+                else:
+                    st.info(f"➡️ 하위집단 예측: **{pred_sub}** ({pred_prob*100:.1f}%)")
+                    final_decision = str(pred_sub)
+
+                # 🕸️ 하위집단 확률 스파이더 차트 (축 라벨에 확률 표시)
                 try:
-                    _vals = [float(p) * 100 for p in probs_sub]
-                    _labels = [f"{lbl} ({val:.1f}%)" for lbl, val in zip(sub_classes, _vals)]
+                    vals = [float(p) * 100 for p in probs_sub]
+                    labels = [f"{lbl} ({val:.1f}%)" for lbl, val in zip(sub_classes, vals)]
                     fig_sub = go.Figure()
-                    fig_sub.add_trace(go.Scatterpolar(r=_vals, theta=_labels, fill='toself'))
+                    fig_sub.add_trace(go.Scatterpolar(r=vals, theta=labels, fill='toself'))
                     fig_sub.update_layout(
                         title="🕸️ PD 하위집단 확률(스파이더 차트)",
                         polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
                         showlegend=False,
-                        height=420,
-                        margin=dict(l=20, r=20, t=60, b=20)
+                        height=480,
+                        margin=dict(l=20, r=20, t=70, b=20)
                     )
                     st.plotly_chart(fig_sub, use_container_width=True)
-                    with st.expander("하위집단 확률 자세히 보기", expanded=False):
-                        for lbl, p in sorted(zip(_labels, _vals), key=lambda x: x[1], reverse=True):
-                            st.write(f"- {lbl}: {p:.1f}%")
                 except Exception:
                     pass
 
-                _top1_lbl, _top1_p = _pairs[0][0], float(_pairs[0][1])
-                _top2_lbl, _top2_p = (_pairs[1][0], float(_pairs[1][1])) if len(_pairs) > 1 else (None, 0.0)
-                _is_mixed = (_top2_lbl is not None) and ((_top1_p - _top2_p) < MIX_MARGIN_P)
+            except Exception as e:
+                st.error(f"Step2 예측 중 오류: {type(e).__name__}: {e}")
+                final_decision = "오류"
 
-                if _is_mixed and _top2_lbl is not None:
-                    st.info(f"➡️ PD 하위 집단 예측 : 혼합형으로 {_top1_lbl} 가능성이 더 높고, {_top2_lbl} 문제를 동반할 수 있습니다({_top1_lbl} {_top1_p*100:.1f}%, {_top2_lbl} {_top2_p*100:.1f}%).")
-                    final_decision = f"혼합형({_top1_lbl} 우세)"
-                else:
-                    st.info(f"➡️ PD 하위 집단 예측: **{pred_sub}** ({pred_prob*100:.1f}%)")
-                    final_decision = pred_sub
-
-                # 학습기반 cut-off 경고
-                sub_cut = None
-                if CUTS and isinstance(CUTS, dict):
-                    sub_cut = (CUTS.get("step2_cutoff_by_class") or {}).get(pred_sub, None)
-                if sub_cut is not None and pred_prob < float(sub_cut):
-                    st.warning(f"⚠️ 예측 확률이 학습기반 cut-off({float(sub_cut):.2f}) 미만입니다. '불확실'로 해석/재검 권고")
-
-            # 정상(또는 정상주의)에서도 Step2 참고 표시(요청에 맞춰 간단 버전)
-            show_step2_reference = str(final_decision).startswith('Normal')
-            if show_step2_reference and model_step2:
-                st.info("ℹ️ **임상 참고:** PD 하위집단 모델은 PD 데이터로 학습되었으므로, 정상 케이스에서는 *참고용*으로만 확인하세요.")
-                try:
-                    feat_map2 = {
-                        'Intensity': final_db,
-                        'SPS': final_sps,
-                        'P_Loudness': p_loud,
-                        'P_Rate': p_rate,
-                        'P_Artic': p_artic,
-                    }
-                    input_2 = pd.DataFrame([[feat_map2.get(c, None) for c in FEATS_STEP2]], columns=FEATS_STEP2)
-                    probs_sub = model_step2.predict_proba(input_2.to_numpy())[0]
-                    sub_classes = list(model_step2.classes_)
-                    pairs = sorted(zip(sub_classes, probs_sub), key=lambda x: float(x[1]), reverse=True)
-
-                    # 🕸️ 참고용 하위집단 확률 스파이더 차트
-                    try:
-                        _vals = [float(p) * 100 for p in probs_sub]
-                        _labels = [f"{lbl} ({val:.1f}%)" for lbl, val in zip(sub_classes, _vals)]
-                        fig_sub = go.Figure()
-                        fig_sub.add_trace(go.Scatterpolar(r=_vals, theta=_labels, fill='toself'))
-                        fig_sub.update_layout(
-                            title="🕸️ (참고) PD 하위집단 확률(스파이더 차트)",
-                            polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
-                            showlegend=False,
-                            height=320,
-                            margin=dict(l=20, r=20, t=60, b=20)
-                        )
-                        st.plotly_chart(fig_sub, use_container_width=True)
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
-
-            # 해석 문구
+            # --- 해석 문구 ---
             sex_code = "M" if subject_gender == "남" else "F"
             pos, neg = generate_interpretation(
-                prob_normal,
-                final_db,
-                final_sps,
-                float(range_adj),
-                float(p_artic),
+                0.0,  # PD-only 모드: 정상확률은 사용하지 않음(함수 내부에서도 참조하지 않음)
+                float(final_db) if np.isfinite(final_db) else 0.0,
+                float(final_sps) if np.isfinite(final_sps) else 0.0,
+                float(range_adj) if np.isfinite(range_adj) else float(st.session_state.get("pitch_range", 0.0) or 0.0),
+                float(p_artic) if np.isfinite(p_artic) else 0.0,
                 float(vhi_total),
                 float(vhi_e),
                 sex=sex_code
@@ -2010,7 +1814,7 @@ if st.session_state.get('is_analyzed'):
                 for r in neg:
                     st.write(f"- {r}")
 
-            # 저장용 데이터 세팅
+            # --- 저장용 데이터 세팅 ---
             patient_info = {
                 "name": subject_name,
                 "age": int(subject_age),
@@ -2018,37 +1822,33 @@ if st.session_state.get('is_analyzed'):
             }
             analysis = {
                 "f0": float(st.session_state.get("f0_mean", 0.0) or 0.0),
-                "range": float(range_adj),
-                "db": float(final_db),
-                "sps": float(final_sps),
+                "range": float(range_adj) if np.isfinite(range_adj) else float(st.session_state.get("pitch_range", 0.0) or 0.0),
+                "db": float(final_db) if np.isfinite(final_db) else float(st.session_state.get("db_adj", 0.0) or 0.0),
+                "sps": float(final_sps) if np.isfinite(final_sps) else float(st.session_state.get("sps_final", 0.0) or 0.0),
                 "vhi_total": float(vhi_total),
                 "vhi_p": float(vhi_p),
                 "vhi_f": float(vhi_f),
                 "vhi_e": float(vhi_e),
-                "p_pitch": float(p_pitch),
-                "p_prange": float(p_prange),
-                "p_loud": float(p_loud),
-                "p_rate": float(p_rate),
-                "p_artic": float(p_artic),
+                "p_artic": float(st.session_state.get("p_artic", 0.0) or 0.0),
+                "p_pitch": float(st.session_state.get("p_pitch", 0.0) or 0.0),
+                "p_loud": float(st.session_state.get("p_loud", 0.0) or 0.0),
+                "p_rate": float(st.session_state.get("p_rate", 0.0) or 0.0),
+                "p_prange": float(st.session_state.get("p_prange", 0.0) or 0.0),
             }
             diagnosis = {
-                "final": str(final_decision),
-                "normal_prob": float(prob_normal),
+                "final": final_decision,
+                "normal_prob": "",  # PD-only 모드에서는 정상확률을 저장하지 않음(시트/메일 호환용 자리)
+                "pd_only_mode": True,
             }
-            step1_meta = {
-                "p_pd": float(p_pd),
-                "p_normal": float(p_norm),
-                "cutoff": float(pd_cut),
-            }
+
             st.session_state["save_ready_data"] = {
                 "patient_info": patient_info,
                 "analysis": analysis,
                 "diagnosis": diagnosis,
-                "step1_meta": step1_meta,
+                "step1_meta": {},  # 호환용
             }
-            st.success("✅ 저장/전송 준비 완료! 아래 버튼을 눌러 전송하거나(SQLite/시트) 저장하세요.")
 
-    # 전송/저장 버튼
+# 전송/저장 버튼
     st.markdown("---")
     if st.button("☁️ 결과 저장/전송", key="btn_send"):
         if "save_ready_data" not in st.session_state:
