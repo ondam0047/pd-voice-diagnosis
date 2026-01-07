@@ -1593,45 +1593,26 @@ if st.session_state.get('is_analyzed'):
         if 'sps_end' not in st.session_state:
             st.session_state['sps_end'] = dur_total
 
-        # --- 말속도 구간(초): 자동 추천 + 정밀 입력 ---
-        sugg_start = float(st.session_state.get('sps_suggest_start', 0.0))
-        sugg_end = float(st.session_state.get('sps_suggest_end', dur_total))
-        has_sugg = bool(st.session_state.get('sps_has_suggest', False))
-
-        cbtn1, cbtn2, _ = st.columns([1.3, 2.7, 2.0])
-        with cbtn1:
-            if st.button("🔍 무음 제거 자동 구간", key="btn_sps_auto"):
-                if has_sugg:
-                    st.session_state['sps_start'] = sugg_start
-                    st.session_state['sps_end'] = sugg_end
-                    st.toast(f"자동 구간 적용: {sugg_start:.2f}–{sugg_end:.2f}초", icon="✅")
-                else:
-                    st.toast("자동 구간을 계산할 수 없었습니다(무음/잡음). 수동으로 조정해 주세요.", icon="⚠️")
-        with cbtn2:
-            if has_sugg:
-                st.caption(f"자동 추천: {sugg_start:.2f}–{sugg_end:.2f}초 (무음 제거)")
-            else:
-                st.caption("자동 추천: 계산 불가(신호 약함/무음)")
-
-        sc1, sc2, sc3 = st.columns([1.2, 1.2, 1.6])
+        # --- 말속도 구간(초): 시작/종료 입력 ---
+        sc1, sc2 = st.columns([1.2, 1.2])
         with sc1:
-            s_time = st.number_input("말속도 시작(초)", 0.0, dur_total, float(st.session_state.get('sps_start', 0.0)), 0.01, key="sps_start")
+            s_time = st.number_input(
+                "말속도 시작(초)",
+                0.0,
+                dur_total,
+                float(st.session_state.get('sps_start', 0.0)),
+                0.01,
+                key="sps_start",
+            )
         with sc2:
-            e_time = st.number_input("말속도 종료(초)", 0.0, dur_total, float(st.session_state.get('sps_end', dur_total)), 0.01, key="sps_end")
-        with sc3:
-            st.markdown("**미세 조정**")
-            b1, b2 = st.columns(2)
-            with b1:
-                if st.button("시작 -0.1", key="btn_sps_s_m01"):
-                    st.session_state['sps_start'] = max(0.0, float(s_time) - 0.1)
-                if st.button("시작 +0.1", key="btn_sps_s_p01"):
-                    st.session_state['sps_start'] = min(dur_total, float(s_time) + 0.1)
-            with b2:
-                if st.button("종료 -0.1", key="btn_sps_e_m01"):
-                    st.session_state['sps_end'] = max(0.0, float(e_time) - 0.1)
-                if st.button("종료 +0.1", key="btn_sps_e_p01"):
-                    st.session_state['sps_end'] = min(dur_total, float(e_time) + 0.1)
-
+            e_time = st.number_input(
+                "말속도 종료(초)",
+                0.0,
+                dur_total,
+                float(st.session_state.get('sps_end', dur_total)),
+                0.01,
+                key="sps_end",
+            )
         if float(e_time) <= float(s_time):
             st.warning("말속도 구간의 종료(초)는 시작(초)보다 커야 합니다. 자동으로 최소 0.1초로 계산합니다.")
         st.session_state['sps_window'] = (float(s_time), float(e_time))
