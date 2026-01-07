@@ -1751,87 +1751,95 @@ if st.session_state.get('is_analyzed'):
             # --- Step2: PD 하위집단 분류 ---
             input_2 = pd.DataFrame([[final_db, final_sps, p_loud, p_rate, p_artic]], columns=FEATS_STEP2)
 
+            # 1) 모델 기본 확률
             try:
                 probs_sub = model_step2.predict_proba(input_2.to_numpy())[0]
                 sub_classes = list(model_step2.classes_)
-                pred_sub = model_step2.predict(input_2.to_numpy())[0]
-                pred_prob = float(probs_sub[sub_classes.index(pred_sub)]) if pred_sub in sub_classes else float(np.max(probs_sub))
+            except Exception as e:
+                st.error(f"Step2 하위집단 모델 예측 중 오류: {type(e).__name__}: {e}")
+                st.stop()
 
-                
-# --- 임상 보정(청지각 기반): 조음/강도/말속도 극단값이 있을 때 '혼합형' 가능성을 반영 ---
-# 기본값 0은 "미입력"으로 취급(슬라이더가 0에서 시작하므로), 0보다 큰 값만 입력으로 간주
-probs_use = np.array(probs_sub, dtype=float)
+            probs_use = np.array(probs_sub, dtype=float)
 
-try:
-    p_artic_in = float(p_artic) if p_artic is not None else 0.0
-    p_loud_in  = float(p_loud)  if p_loud  is not None else 0.0
-    p_rate_in  = float(p_rate)  if p_rate  is not None else 0.0
-except Exception:
-    p_artic_in, p_loud_in, p_rate_in = 0.0, 0.0, 0.0
-
-any_perc_entered = (p_artic_in > 0.0) or (p_loud_in > 0.0) or (p_rate_in > 0.0)
-
-if any_perc_entered:
-    # 임계값(필요 시 조정)
-    ARTIC_LOW_THR = 40.0   # 조음정확도(0~100, 높을수록 좋음) : 40 이하이면 조음 문제 신호
-    LOUD_LOW_THR  = 35.0   # 강도(0~100, 높을수록 큼) : 35 이하이면 hypophonia 신호
-    RATE_HIGH_THR = 70.0   # 말속도(0~100, 높을수록 빠름) : 70 이상이면 fast rate 신호
-
-    # 클래스 인덱스 찾기(훈련 라벨이 '강도 집단/말속도 집단/조음 집단' 형태)
-    idx_int = sub_classes.index("강도 집단") if "강도 집단" in sub_classes else None
-    idx_rate = sub_classes.index("말속도 집단") if "말속도 집단" in sub_classes else None
-    idx_art = sub_classes.index("조음 집단") if "조음 집단" in sub_classes else None
-
-    boosts = np.zeros_like(probs_use, dtype=float)
-
-    # 조음 정확도 낮음 → 조음 집단 확률 완만하게 상향
-    if (idx_art is not None) and (p_artic_in > 0.0) and (p_artic_in <= ARTIC_LOW_THR):
-        boosts[idx_art] += (ARTIC_LOW_THR - p_artic_in) / ARTIC_LOW_THR * 0.35  # 최대 +0.35
-
-    # 강도 낮음 → 강도 집단 확률 상향
-    if (idx_int is not None) and (p_loud_in > 0.0) and (p_loud_in <= LOUD_LOW_THR):
-        boosts[idx_int] += (LOUD_LOW_THR - p_loud_in) / LOUD_LOW_THR * 0.25  # 최대 +0.25
-
-    # 말속도 빠름 → 말속도 집단 확률 상향
-    if (idx_rate is not None) and (p_rate_in > 0.0) and (p_rate_in >= RATE_HIGH_THR):
-        boosts[idx_rate] += (p_rate_in - RATE_HIGH_THR) / (100.0 - RATE_HIGH_THR) * 0.25  # 최대 +0.25
-
-    if float(np.sum(boosts)) > 0.0:
-        probs_use = probs_use + boosts
-        s = float(np.sum(probs_use))
-        if s > 0:
-            probs_use = probs_use / s
-
-                pairs = sorted(zip(sub_classes, probs_use), key=lambda x: float(x[1]), reverse=True)
-                top1_lbl, top1_p = pairs[0][0], float(pairs[0][1])
-                top2_lbl, top2_p = (pairs[1][0], float(pairs[1][1])) if len(pairs) > 1 else (None, 0.0)
-
-                is_mixed = (top2_lbl is not None) and ((top1_p - top2_p) < MIX_MARGIN_P)
-
-                st.markdown("### 🧠 PD 하위집단 결과 (Step2)")
-                if is_mixed and top2_lbl is not None:
-                    st.info(f"➡️ 하위집단 예측: **혼합형** ({top1_lbl} {top1_p*100:.1f}%, {top2_lbl} {top2_p*100:.1f}%)")
-                    final_decision = f"혼합형({top1_lbl} 우세)"
-                else:
-                    st.info(f"➡️ 하위집단 예측: **{top1_lbl}** ({top1_p*100:.1f}%)")
-                    final_decision = str(top1_lbl)
-
-                # 🕸️ 하위집단 확률 스파이더 차트 (축 라벨에 확률 표시)
+            # 2) (선택) 임상 보정(청지각 기반): 극단값이 있을 때 '동반(혼합형)' 가능성을 더 잘 드러내기
+            #    - 슬라이더 기본값이 0이므로, 0은 '미입력'으로 취급합니다.
+            def _safe_float(x, default=0.0):
                 try:
-                    vals = [float(p) * 100 for p in probs_use]
-                    labels = [f"{lbl} ({val:.1f}%)" for lbl, val in zip(sub_classes, vals)]
-                    fig_sub = go.Figure()
-                    fig_sub.add_trace(go.Scatterpolar(r=vals, theta=labels, fill='toself'))
-                    fig_sub.update_layout(
-                        title="🕸️ PD 하위집단 확률(스파이더 차트)",
-                        polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
-                        showlegend=False,
-                        height=480,
-                        margin=dict(l=20, r=20, t=70, b=20)
-                    )
-                    st.plotly_chart(fig_sub, use_container_width=True)
+                    return float(x) if x is not None else float(default)
                 except Exception:
-                    pass
+                    return float(default)
+
+            p_artic_in = _safe_float(p_artic)
+            p_loud_in  = _safe_float(p_loud)
+            p_rate_in  = _safe_float(p_rate)
+            any_perc_entered = (p_artic_in > 0.0) or (p_loud_in > 0.0) or (p_rate_in > 0.0)
+
+            if any_perc_entered:
+                # 임계값(필요 시 조정)
+                ARTIC_LOW_THR = 40.0   # 조음정확도(0~100, 높을수록 좋음) : 40 이하이면 조음 문제 신호
+                LOUD_LOW_THR  = 35.0   # 강도(0~100, 높을수록 큼)        : 35 이하이면 저강도 신호
+                RATE_HIGH_THR = 70.0   # 말속도(0~100, 높을수록 빠름)     : 70 이상이면 과속 신호
+                MAX_ARTIC_BOOST = 0.35
+                MAX_LOUD_BOOST  = 0.25
+                MAX_RATE_BOOST  = 0.25
+
+                boosts = np.zeros_like(probs_use, dtype=float)
+                # 클래스 인덱스 찾기(라벨은 training_data에서 학습된 그대로 사용: '조음 집단', '강도 집단', '말속도 집단')
+                idx_artic = sub_classes.index('조음 집단') if '조음 집단' in sub_classes else None
+                idx_loud  = sub_classes.index('강도 집단') if '강도 집단' in sub_classes else None
+                idx_rate  = sub_classes.index('말속도 집단') if '말속도 집단' in sub_classes else None
+
+                # 조음정확도: 낮을수록 조음 집단 동반 가능성 ↑
+                if idx_artic is not None and (p_artic_in > 0.0) and (p_artic_in <= ARTIC_LOW_THR):
+                    strength = (ARTIC_LOW_THR - p_artic_in) / max(ARTIC_LOW_THR, 1e-6)  # 0~1
+                    boosts[idx_artic] += MAX_ARTIC_BOOST * float(np.clip(strength, 0.0, 1.0))
+
+                # 강도: 낮을수록 강도 집단 동반 가능성 ↑
+                if idx_loud is not None and (p_loud_in > 0.0) and (p_loud_in <= LOUD_LOW_THR):
+                    strength = (LOUD_LOW_THR - p_loud_in) / max(LOUD_LOW_THR, 1e-6)
+                    boosts[idx_loud] += MAX_LOUD_BOOST * float(np.clip(strength, 0.0, 1.0))
+
+                # 말속도: 높을수록 말속도 집단 동반 가능성 ↑
+                if idx_rate is not None and (p_rate_in > 0.0) and (p_rate_in >= RATE_HIGH_THR):
+                    strength = (p_rate_in - RATE_HIGH_THR) / max(100.0 - RATE_HIGH_THR, 1e-6)
+                    boosts[idx_rate] += MAX_RATE_BOOST * float(np.clip(strength, 0.0, 1.0))
+
+                if float(np.sum(boosts)) > 0.0:
+                    probs_use = probs_use + boosts
+                    s = float(np.sum(probs_use))
+                    if s > 0:
+                        probs_use = probs_use / s
+
+            # 3) 우세/동반(혼합형) 판정
+            pairs = sorted(zip(sub_classes, probs_use), key=lambda x: float(x[1]), reverse=True)
+            top1_lbl, top1_p = pairs[0][0], float(pairs[0][1])
+            top2_lbl, top2_p = (pairs[1][0], float(pairs[1][1])) if len(pairs) > 1 else (None, 0.0)
+            is_mixed = (top2_lbl is not None) and ((top1_p - top2_p) < MIX_MARGIN_P)
+
+            st.markdown("### 🧠 PD 하위집단 결과 (Step2)")
+            if is_mixed and top2_lbl is not None:
+                st.info(f"➡️ 하위집단 예측: **혼합형** ({top1_lbl} {top1_p*100:.1f}%, {top2_lbl} {top2_p*100:.1f}%)")
+                final_decision = f"혼합형({top1_lbl} 우세)"
+            else:
+                st.info(f"➡️ 하위집단 예측: **{top1_lbl}** ({top1_p*100:.1f}%)")
+                final_decision = str(top1_lbl)
+
+            # 🕸️ 하위집단 확률 스파이더 차트 (축 라벨에 확률 표시)
+            try:
+                vals = [float(p) * 100 for p in probs_use]
+                labels = [f"{lbl} ({val:.1f}%)" for lbl, val in zip(sub_classes, vals)]
+                fig_sub = go.Figure()
+                fig_sub.add_trace(go.Scatterpolar(r=vals, theta=labels, fill='toself'))
+                fig_sub.update_layout(
+                    title="🕸️ PD 하위집단 확률(스파이더 차트)",
+                    polar=dict(radialaxis=dict(visible=True, range=[0, 100])),
+                    showlegend=False,
+                    height=480,
+                    margin=dict(l=20, r=20, t=70, b=20)
+                )
+                st.plotly_chart(fig_sub, use_container_width=True)
+            except Exception:
+                pass
 
             except Exception as e:
                 st.error(f"Step2 예측 중 오류: {type(e).__name__}: {e}")
