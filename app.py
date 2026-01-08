@@ -1687,16 +1687,16 @@ if st.session_state.get('is_analyzed'):
 
 
         with st.expander("VHI-10 문항 입력 (클릭해서 펼치기)", expanded=True):
-            q1 = st.radio("1. 사람들이 내 목소리를 듣는데 어려움을 느낀다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q1")
-            q2 = st.radio("2. 사람들이 내 말을 잘 못 알아들어 반복해야 한다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q2")
-            q3 = st.radio("3. 낯선 사람들과 전화로 대화하는 것이 어렵다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q3")
-            q4 = st.radio("4. 목소리 문제로 인해 긴장된다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q4")
-            q5 = st.radio("5. 목소리 문제로 인해 사람들을 피하게 된다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q5")
-            q6 = st.radio("6. 내 목소리 때문에 짜증이 난다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q6")
-            q7 = st.radio("7. 목소리 문제로 수입에 지장이 있다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q7")
-            q8 = st.radio("8. 내 목소리 문제로 대화가 제한된다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q8")
-            q9 = st.radio("9. 내 목소리 때문에 소외감을 느낀다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q9")
-            q10 = st.radio("10. 목소리를 내는 것이 힘들다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q10")
+            q1 = st.radio("1. 목소리 때문에 상대방이 내 말을 알아듣기 힘들어한다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q1")
+            q2 = st.radio("2. 시끄러운 곳에서는 사람들이 내 말을 이해하기 어려워한다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q2")
+            q3 = st.radio("3. 사람들이 나에게 목소리가 왜 그러냐고 묻는다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q3")
+            q4 = st.radio("4. 목소리를 내려면 힘을 주어야 나오는 것 같다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q4")
+            q5 = st.radio("5. 음성문제로 개인 생활과 사회생활에 제한을 받는다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q5")
+            q6 = st.radio("6. 목소리가 언제쯤 맑게 잘 나올지 알 수가 없다(예측이 어렵다).", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q6")
+            q7 = st.radio("7. 내 목소리 때문에 대화에 끼지 못하여 소외감을 느낀다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q7")
+            q8 = st.radio("8. 음성 문제로 인해 소득(수입)에 감소가 생긴다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q8")
+            q9 = st.radio("9. 내 목소리 문제로 속이 상한다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q9")
+            q10 = st.radio("10. 음성 문제가 장애로(핸디캡으로) 여겨진다.", options=vhi_opts, horizontal=True, format_func=_vhi_fmt, key="vhi_q10")
 
         vhi_f = q1 + q2 + q5 + q7 + q8
         vhi_p = q3 + q4 + q6
@@ -1916,3 +1916,4 @@ if st.session_state.get('is_analyzed'):
                 st.success(msg)
             else:
                 st.error(msg)
+
