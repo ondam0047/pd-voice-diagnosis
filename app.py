@@ -1727,7 +1727,9 @@ if st.session_state.get('is_analyzed'):
                 st.caption(f"모델 로드/학습 오류: {MODEL_LOAD_ERROR}")
         else:
             # --- 입력값 수집 (보정값 우선) ---
-            final_db = _safe_float(st.session_state.get("db_adj", np.nan))
+            mean_db0 = _safe_float(st.session_state.get("mean_db", np.nan))
+            db_adj0 = _safe_float(st.session_state.get("db_adj", 0.0))
+            final_db = (mean_db0 + db_adj0) if np.isfinite(mean_db0) else np.nan
             final_sps = _safe_float(st.session_state.get("sps_final", np.nan))
             range_adj = _safe_float(locals().get("range_adj", st.session_state.get("pitch_range", np.nan)))
 
@@ -1876,7 +1878,7 @@ if st.session_state.get('is_analyzed'):
             analysis = {
                 "f0": float(st.session_state.get("f0_mean", 0.0) or 0.0),
                 "range": float(range_adj) if np.isfinite(range_adj) else float(st.session_state.get("pitch_range", 0.0) or 0.0),
-                "db": float(final_db) if np.isfinite(final_db) else float(st.session_state.get("db_adj", 0.0) or 0.0),
+                "db": float(final_db) if np.isfinite(final_db) else (float(st.session_state.get("mean_db", 0.0) or 0.0) + float(st.session_state.get("db_adj", 0.0) or 0.0)),
                 "sps": float(final_sps) if np.isfinite(final_sps) else float(st.session_state.get("sps_final", 0.0) or 0.0),
                 "vhi_total": float(vhi_total),
                 "vhi_p": float(vhi_p),
