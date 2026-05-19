@@ -1,0 +1,422 @@
+
+########################################################################
+# TASK: step1_pd_vs_normal
+########################################################################
+
+--- feature_set=acoustic_only  n_samples=138  classes=['PD', 'normal']
+    class counts: {'normal': 70, 'PD': 68}
+=== logistic_regression  |  features: step1_pd_vs_normal/acoustic_only ===
+  Macro-F1 (mean +/- sd):  0.949 +/- 0.036  (folds: 0.929  1.000  0.893  0.963  0.963)
+  Balanced accuracy:       0.949
+  Per-class precision / recall / F1:
+    PD                         P=0.96  R=0.94  F1=0.95  n=68
+    normal                     P=0.94  R=0.96  F1=0.95  n=70
+  Confusion matrix (rows=true, cols=pred):
+                      PD      normal
+PD                    64           4
+normal                 3          67
+
+=== linear_discriminant  |  features: step1_pd_vs_normal/acoustic_only ===
+  Macro-F1 (mean +/- sd):  0.935 +/- 0.027  (folds: 0.929  0.964  0.893  0.925  0.963)
+  Balanced accuracy:       0.934
+  Per-class precision / recall / F1:
+    PD                         P=0.97  R=0.90  F1=0.93  n=68
+    normal                     P=0.91  R=0.97  F1=0.94  n=70
+  Confusion matrix (rows=true, cols=pred):
+                      PD      normal
+PD                    61           7
+normal                 2          68
+
+=== random_forest  |  features: step1_pd_vs_normal/acoustic_only ===
+  Macro-F1 (mean +/- sd):  0.935 +/- 0.061  (folds: 0.964  0.928  0.821  0.963  1.000)
+  Balanced accuracy:       0.935
+  Per-class precision / recall / F1:
+    PD                         P=0.95  R=0.91  F1=0.93  n=68
+    normal                     P=0.92  R=0.96  F1=0.94  n=70
+  Confusion matrix (rows=true, cols=pred):
+                      PD      normal
+PD                    62           6
+normal                 3          67
+
+=== svm_rbf  |  features: step1_pd_vs_normal/acoustic_only ===
+  Macro-F1 (mean +/- sd):  0.920 +/- 0.052  (folds: 0.929  0.964  0.821  0.963  0.925)
+  Balanced accuracy:       0.920
+  Per-class precision / recall / F1:
+    PD                         P=0.94  R=0.90  F1=0.92  n=68
+    normal                     P=0.90  R=0.94  F1=0.92  n=70
+  Confusion matrix (rows=true, cols=pred):
+                      PD      normal
+PD                    61           7
+normal                 4          66
+
+=== gradient_boosting  |  features: step1_pd_vs_normal/acoustic_only ===
+  Macro-F1 (mean +/- sd):  0.913 +/- 0.037  (folds: 0.929  0.929  0.857  0.888  0.963)
+  Balanced accuracy:       0.913
+  Per-class precision / recall / F1:
+    PD                         P=0.91  R=0.91  F1=0.91  n=68
+    normal                     P=0.91  R=0.91  F1=0.91  n=70
+  Confusion matrix (rows=true, cols=pred):
+                      PD      normal
+PD                    62           6
+normal                 6          64
+
+
+--- feature_set=perceptual_only  n_samples=138  classes=['PD', 'normal']
+    class counts: {'normal': 70, 'PD': 68}
+=== logistic_regression  |  features: step1_pd_vs_normal/perceptual_only ===
+  Macro-F1 (mean +/- sd):  0.861 +/- 0.093  (folds: 0.893  0.821  0.964  0.700  0.926)
+  Balanced accuracy:       0.862
+  Per-class precision / recall / F1:
+    PD                         P=0.88  R=0.84  F1=0.86  n=68
+    normal                     P=0.85  R=0.89  F1=0.87  n=70
+  Confusion matrix (rows=true, cols=pred):
+                      PD      normal
+PD                    57          11
+normal                 8          62
+
+=== linear_discriminant  |  features: step1_pd_vs_normal/perceptual_only ===
+  Macro-F1 (mean +/- sd):  0.853 +/- 0.080  (folds: 0.893  0.856  0.892  0.700  0.926)
+  Balanced accuracy:       0.854
+  Per-class precision / recall / F1:
+    PD                         P=0.89  R=0.81  F1=0.85  n=68
+    normal                     P=0.83  R=0.90  F1=0.86  n=70
+  Confusion matrix (rows=true, cols=pred):
+                      PD      normal
+PD                    55          13
+normal                 7          63
+
+=== random_forest  |  features: step1_pd_vs_normal/perceptual_only ===
+  Macro-F1 (mean +/- sd):  1.000 +/- 0.000  (folds: 1.000  1.000  1.000  1.000  1.000)
+  Balanced accuracy:       1.000
+  Per-class precision / recall / F1:
+    PD                         P=1.00  R=1.00  F1=1.00  n=68
+    normal                     P=1.00  R=1.00  F1=1.00  n=70
+  Confusion matrix (rows=true, cols=pred):
+                      PD      normal
+PD                    68           0
+normal                 0          70
+
+=== svm_rbf  |  features: step1_pd_vs_normal/perceptual_only ===
+  Macro-F1 (mean +/- sd):  0.993 +/- 0.014  (folds: 0.964  1.000  1.000  1.000  1.000)
+  Balanced accuracy:       0.993
+  Per-class precision / recall / F1:
+    PD                         P=1.00  R=0.99  F1=0.99  n=68
+    normal                     P=0.99  R=1.00  F1=0.99  n=70
+  Confusion matrix (rows=true, cols=pred):
+                      PD      normal
+PD                    67           1
+normal                 0          70
+
+=== gradient_boosting  |  features: step1_pd_vs_normal/perceptual_only ===
+  Macro-F1 (mean +/- sd):  1.000 +/- 0.000  (folds: 1.000  1.000  1.000  1.000  1.000)
+  Balanced accuracy:       1.000
+  Per-class precision / recall / F1:
+    PD                         P=1.00  R=1.00  F1=1.00  n=68
+    normal                     P=1.00  R=1.00  F1=1.00  n=70
+  Confusion matrix (rows=true, cols=pred):
+                      PD      normal
+PD                    68           0
+normal                 0          70
+
+
+--- feature_set=combined  n_samples=138  classes=['PD', 'normal']
+    class counts: {'normal': 70, 'PD': 68}
+=== logistic_regression  |  features: step1_pd_vs_normal/combined ===
+  Macro-F1 (mean +/- sd):  0.978 +/- 0.018  (folds: 1.000  0.964  1.000  0.963  0.963)
+  Balanced accuracy:       0.977
+  Per-class precision / recall / F1:
+    PD                         P=0.99  R=0.97  F1=0.98  n=68
+    normal                     P=0.97  R=0.99  F1=0.98  n=70
+  Confusion matrix (rows=true, cols=pred):
+                      PD      normal
+PD                    66           2
+normal                 1          69
+
+=== linear_discriminant  |  features: step1_pd_vs_normal/combined ===
+  Macro-F1 (mean +/- sd):  0.978 +/- 0.018  (folds: 1.000  0.964  0.964  0.963  1.000)
+  Balanced accuracy:       0.978
+  Per-class precision / recall / F1:
+    PD                         P=1.00  R=0.96  F1=0.98  n=68
+    normal                     P=0.96  R=1.00  F1=0.98  n=70
+  Confusion matrix (rows=true, cols=pred):
+                      PD      normal
+PD                    65           3
+normal                 0          70
+
+=== random_forest  |  features: step1_pd_vs_normal/combined ===
+  Macro-F1 (mean +/- sd):  1.000 +/- 0.000  (folds: 1.000  1.000  1.000  1.000  1.000)
+  Balanced accuracy:       1.000
+  Per-class precision / recall / F1:
+    PD                         P=1.00  R=1.00  F1=1.00  n=68
+    normal                     P=1.00  R=1.00  F1=1.00  n=70
+  Confusion matrix (rows=true, cols=pred):
+                      PD      normal
+PD                    68           0
+normal                 0          70
+
+=== svm_rbf  |  features: step1_pd_vs_normal/combined ===
+  Macro-F1 (mean +/- sd):  1.000 +/- 0.000  (folds: 1.000  1.000  1.000  1.000  1.000)
+  Balanced accuracy:       1.000
+  Per-class precision / recall / F1:
+    PD                         P=1.00  R=1.00  F1=1.00  n=68
+    normal                     P=1.00  R=1.00  F1=1.00  n=70
+  Confusion matrix (rows=true, cols=pred):
+                      PD      normal
+PD                    68           0
+normal                 0          70
+
+=== gradient_boosting  |  features: step1_pd_vs_normal/combined ===
+  Macro-F1 (mean +/- sd):  1.000 +/- 0.000  (folds: 1.000  1.000  1.000  1.000  1.000)
+  Balanced accuracy:       1.000
+  Per-class precision / recall / F1:
+    PD                         P=1.00  R=1.00  F1=1.00  n=68
+    normal                     P=1.00  R=1.00  F1=1.00  n=70
+  Confusion matrix (rows=true, cols=pred):
+                      PD      normal
+PD                    68           0
+normal                 0          70
+
+
+########################################################################
+# TASK: step2_subtype
+########################################################################
+
+--- feature_set=acoustic_only  n_samples=68  classes=['PD_Articulation', 'PD_Intensity', 'PD_Rate']
+    class counts: {'PD_Intensity': 42, 'PD_Articulation': 20, 'PD_Rate': 6}
+=== logistic_regression  |  features: step2_subtype/acoustic_only ===
+  Macro-F1 (mean +/- sd):  0.501 +/- 0.102  (folds: 0.611  0.602  0.338  0.509  0.444)
+  Balanced accuracy:       0.570
+  Per-class precision / recall / F1:
+    PD_Articulation            P=0.54  R=0.75  F1=0.62  n=20
+    PD_Intensity               P=0.80  R=0.57  F1=0.67  n=42
+    PD_Rate                    P=0.20  R=0.33  F1=0.25  n=6
+  Confusion matrix (rows=true, cols=pred):
+                   PD_Articulation     PD_Intensity          PD_Rate
+PD_Articulation                 15                4                1
+PD_Intensity                    11               24                7
+PD_Rate                          2                2                2
+
+=== linear_discriminant  |  features: step2_subtype/acoustic_only ===
+  Macro-F1 (mean +/- sd):  0.509 +/- 0.096  (folds: 0.574  0.616  0.338  0.483  0.533)
+  Balanced accuracy:       0.636
+  Per-class precision / recall / F1:
+    PD_Articulation            P=0.48  R=0.55  F1=0.51  n=20
+    PD_Intensity               P=0.80  R=0.57  F1=0.67  n=42
+    PD_Rate                    P=0.27  R=0.67  F1=0.38  n=6
+  Confusion matrix (rows=true, cols=pred):
+                   PD_Articulation     PD_Intensity          PD_Rate
+PD_Articulation                 11                6                3
+PD_Intensity                    10               24                8
+PD_Rate                          2                0                4
+
+=== random_forest  |  features: step2_subtype/acoustic_only ===
+  Macro-F1 (mean +/- sd):  0.507 +/- 0.107  (folds: 0.400  0.685  0.533  0.390  0.525)
+  Balanced accuracy:       0.544
+  Per-class precision / recall / F1:
+    PD_Articulation            P=0.68  R=0.65  F1=0.67  n=20
+    PD_Intensity               P=0.79  R=0.79  F1=0.79  n=42
+    PD_Rate                    P=0.14  R=0.17  F1=0.15  n=6
+  Confusion matrix (rows=true, cols=pred):
+                   PD_Articulation     PD_Intensity          PD_Rate
+PD_Articulation                 13                5                2
+PD_Intensity                     5               33                4
+PD_Rate                          1                4                1
+
+=== svm_rbf  |  features: step2_subtype/acoustic_only ===
+  Macro-F1 (mean +/- sd):  0.597 +/- 0.206  (folds: 0.592  0.856  0.492  0.275  0.771)
+  Balanced accuracy:       0.644
+  Per-class precision / recall / F1:
+    PD_Articulation            P=0.50  R=0.65  F1=0.57  n=20
+    PD_Intensity               P=0.81  R=0.69  F1=0.74  n=42
+    PD_Rate                    P=0.50  R=0.50  F1=0.50  n=6
+  Confusion matrix (rows=true, cols=pred):
+                   PD_Articulation     PD_Intensity          PD_Rate
+PD_Articulation                 13                7                0
+PD_Intensity                    10               29                3
+PD_Rate                          3                0                3
+
+=== gradient_boosting  |  features: step2_subtype/acoustic_only ===
+  Macro-F1 (mean +/- sd):  0.443 +/- 0.199  (folds: 0.357  0.804  0.497  0.324  0.233)
+  Balanced accuracy:       0.478
+  Per-class precision / recall / F1:
+    PD_Articulation            P=0.53  R=0.45  F1=0.49  n=20
+    PD_Intensity               P=0.72  R=0.79  F1=0.75  n=42
+    PD_Rate                    P=0.20  R=0.17  F1=0.18  n=6
+  Confusion matrix (rows=true, cols=pred):
+                   PD_Articulation     PD_Intensity          PD_Rate
+PD_Articulation                  9               10                1
+PD_Intensity                     6               33                3
+PD_Rate                          2                3                1
+
+
+--- feature_set=perceptual_only  n_samples=68  classes=['PD_Articulation', 'PD_Intensity', 'PD_Rate']
+    class counts: {'PD_Intensity': 42, 'PD_Articulation': 20, 'PD_Rate': 6}
+=== logistic_regression  |  features: step2_subtype/perceptual_only ===
+  Macro-F1 (mean +/- sd):  0.782 +/- 0.096  (folds: 0.786  0.856  0.600  0.800  0.867)
+  Balanced accuracy:       0.843
+  Per-class precision / recall / F1:
+    PD_Articulation            P=0.84  R=0.80  F1=0.82  n=20
+    PD_Intensity               P=0.93  R=0.93  F1=0.93  n=42
+    PD_Rate                    P=0.57  R=0.67  F1=0.62  n=6
+  Confusion matrix (rows=true, cols=pred):
+                   PD_Articulation     PD_Intensity          PD_Rate
+PD_Articulation                 16                3                1
+PD_Intensity                     1               39                2
+PD_Rate                          2                0                4
+
+=== linear_discriminant  |  features: step2_subtype/perceptual_only ===
+  Macro-F1 (mean +/- sd):  0.747 +/- 0.092  (folds: 0.709  0.752  0.600  0.800  0.875)
+  Balanced accuracy:       0.793
+  Per-class precision / recall / F1:
+    PD_Articulation            P=0.76  R=0.65  F1=0.70  n=20
+    PD_Intensity               P=0.87  R=0.93  F1=0.90  n=42
+    PD_Rate                    P=0.67  R=0.67  F1=0.67  n=6
+  Confusion matrix (rows=true, cols=pred):
+                   PD_Articulation     PD_Intensity          PD_Rate
+PD_Articulation                 13                6                1
+PD_Intensity                     2               39                1
+PD_Rate                          2                0                4
+
+=== random_forest  |  features: step2_subtype/perceptual_only ===
+  Macro-F1 (mean +/- sd):  0.920 +/- 0.160  (folds: 1.000  1.000  0.600  1.000  1.000)
+  Balanced accuracy:       0.933
+  Per-class precision / recall / F1:
+    PD_Articulation            P=0.91  R=1.00  F1=0.95  n=20
+    PD_Intensity               P=1.00  R=1.00  F1=1.00  n=42
+    PD_Rate                    P=1.00  R=0.67  F1=0.80  n=6
+  Confusion matrix (rows=true, cols=pred):
+                   PD_Articulation     PD_Intensity          PD_Rate
+PD_Articulation                 20                0                0
+PD_Intensity                     0               42                0
+PD_Rate                          2                0                4
+
+=== svm_rbf  |  features: step2_subtype/perceptual_only ===
+  Macro-F1 (mean +/- sd):  0.882 +/- 0.175  (folds: 0.935  1.000  0.536  1.000  0.941)
+  Balanced accuracy:       0.892
+  Per-class precision / recall / F1:
+    PD_Articulation            P=0.86  R=0.90  F1=0.88  n=20
+    PD_Intensity               P=0.95  R=0.98  F1=0.96  n=42
+    PD_Rate                    P=1.00  R=0.67  F1=0.80  n=6
+  Confusion matrix (rows=true, cols=pred):
+                   PD_Articulation     PD_Intensity          PD_Rate
+PD_Articulation                 18                2                0
+PD_Intensity                     1               41                0
+PD_Rate                          2                0                4
+
+=== gradient_boosting  |  features: step2_subtype/perceptual_only ===
+  Macro-F1 (mean +/- sd):  0.926 +/- 0.148  (folds: 1.000  1.000  0.630  1.000  1.000)
+  Balanced accuracy:       0.933
+  Per-class precision / recall / F1:
+    PD_Articulation            P=1.00  R=1.00  F1=1.00  n=20
+    PD_Intensity               P=0.95  R=1.00  F1=0.98  n=42
+    PD_Rate                    P=1.00  R=0.67  F1=0.80  n=6
+  Confusion matrix (rows=true, cols=pred):
+                   PD_Articulation     PD_Intensity          PD_Rate
+PD_Articulation                 20                0                0
+PD_Intensity                     0               42                0
+PD_Rate                          0                2                4
+
+
+--- feature_set=combined  n_samples=68  classes=['PD_Articulation', 'PD_Intensity', 'PD_Rate']
+    class counts: {'PD_Intensity': 42, 'PD_Articulation': 20, 'PD_Rate': 6}
+=== logistic_regression  |  features: step2_subtype/combined ===
+  Macro-F1 (mean +/- sd):  0.806 +/- 0.134  (folds: 0.880  0.856  0.554  0.800  0.941)
+  Balanced accuracy:       0.834
+  Per-class precision / recall / F1:
+    PD_Articulation            P=0.76  R=0.80  F1=0.78  n=20
+    PD_Intensity               P=0.90  R=0.90  F1=0.90  n=42
+    PD_Rate                    P=0.80  R=0.67  F1=0.73  n=6
+  Confusion matrix (rows=true, cols=pred):
+                   PD_Articulation     PD_Intensity          PD_Rate
+PD_Articulation                 16                4                0
+PD_Intensity                     3               38                1
+PD_Rate                          2                0                4
+
+=== linear_discriminant  |  features: step2_subtype/combined ===
+  Macro-F1 (mean +/- sd):  0.751 +/- 0.126  (folds: 0.709  0.752  0.554  0.800  0.941)
+  Balanced accuracy:       0.801
+  Per-class precision / recall / F1:
+    PD_Articulation            P=0.74  R=0.70  F1=0.72  n=20
+    PD_Intensity               P=0.88  R=0.90  F1=0.89  n=42
+    PD_Rate                    P=0.67  R=0.67  F1=0.67  n=6
+  Confusion matrix (rows=true, cols=pred):
+                   PD_Articulation     PD_Intensity          PD_Rate
+PD_Articulation                 14                5                1
+PD_Intensity                     3               38                1
+PD_Rate                          2                0                4
+
+=== random_forest  |  features: step2_subtype/combined ===
+  Macro-F1 (mean +/- sd):  0.920 +/- 0.160  (folds: 1.000  1.000  0.600  1.000  1.000)
+  Balanced accuracy:       0.933
+  Per-class precision / recall / F1:
+    PD_Articulation            P=0.91  R=1.00  F1=0.95  n=20
+    PD_Intensity               P=1.00  R=1.00  F1=1.00  n=42
+    PD_Rate                    P=1.00  R=0.67  F1=0.80  n=6
+  Confusion matrix (rows=true, cols=pred):
+                   PD_Articulation     PD_Intensity          PD_Rate
+PD_Articulation                 20                0                0
+PD_Intensity                     0               42                0
+PD_Rate                          2                0                4
+
+=== svm_rbf  |  features: step2_subtype/combined ===
+  Macro-F1 (mean +/- sd):  0.920 +/- 0.160  (folds: 1.000  1.000  0.600  1.000  1.000)
+  Balanced accuracy:       0.933
+  Per-class precision / recall / F1:
+    PD_Articulation            P=0.91  R=1.00  F1=0.95  n=20
+    PD_Intensity               P=1.00  R=1.00  F1=1.00  n=42
+    PD_Rate                    P=1.00  R=0.67  F1=0.80  n=6
+  Confusion matrix (rows=true, cols=pred):
+                   PD_Articulation     PD_Intensity          PD_Rate
+PD_Articulation                 20                0                0
+PD_Intensity                     0               42                0
+PD_Rate                          2                0                4
+
+=== gradient_boosting  |  features: step2_subtype/combined ===
+  Macro-F1 (mean +/- sd):  0.913 +/- 0.144  (folds: 0.935  1.000  0.630  1.000  1.000)
+  Balanced accuracy:       0.917
+  Per-class precision / recall / F1:
+    PD_Articulation            P=1.00  R=0.95  F1=0.97  n=20
+    PD_Intensity               P=0.93  R=1.00  F1=0.97  n=42
+    PD_Rate                    P=1.00  R=0.67  F1=0.80  n=6
+  Confusion matrix (rows=true, cols=pred):
+                   PD_Articulation     PD_Intensity          PD_Rate
+PD_Articulation                 19                1                0
+PD_Intensity                     0               42                0
+PD_Rate                          0                2                4
+
+
+========================================================================
+CROSS-COMPARISON (sorted by macro-F1 within each feature_set):
+              model                           features  n_classes  macro_f1_mean  macro_f1_sd  balanced_accuracy
+logistic_regression   step1_pd_vs_normal/acoustic_only          2       0.949362     0.036232           0.948901
+      random_forest   step1_pd_vs_normal/acoustic_only          2       0.935281     0.061395           0.935165
+linear_discriminant   step1_pd_vs_normal/acoustic_only          2       0.934658     0.026660           0.934066
+            svm_rbf   step1_pd_vs_normal/acoustic_only          2       0.920354     0.052239           0.919780
+  gradient_boosting   step1_pd_vs_normal/acoustic_only          2       0.913105     0.036640           0.913187
+      random_forest        step1_pd_vs_normal/combined          2       1.000000     0.000000           1.000000
+            svm_rbf        step1_pd_vs_normal/combined          2       1.000000     0.000000           1.000000
+  gradient_boosting        step1_pd_vs_normal/combined          2       1.000000     0.000000           1.000000
+linear_discriminant        step1_pd_vs_normal/combined          2       0.978248     0.017769           0.978022
+logistic_regression        step1_pd_vs_normal/combined          2       0.977951     0.018011           0.977473
+      random_forest step1_pd_vs_normal/perceptual_only          2       1.000000     0.000000           1.000000
+  gradient_boosting step1_pd_vs_normal/perceptual_only          2       1.000000     0.000000           1.000000
+            svm_rbf step1_pd_vs_normal/perceptual_only          2       0.992848     0.014304           0.992857
+logistic_regression step1_pd_vs_normal/perceptual_only          2       0.860797     0.093136           0.861538
+linear_discriminant step1_pd_vs_normal/perceptual_only          2       0.853314     0.079740           0.854396
+            svm_rbf        step2_subtype/acoustic_only          3       0.597229     0.205931           0.644444
+linear_discriminant        step2_subtype/acoustic_only          3       0.508945     0.095852           0.636111
+      random_forest        step2_subtype/acoustic_only          3       0.506701     0.107495           0.543519
+logistic_regression        step2_subtype/acoustic_only          3       0.500985     0.101895           0.570370
+  gradient_boosting        step2_subtype/acoustic_only          3       0.442967     0.199492           0.477778
+      random_forest             step2_subtype/combined          3       0.920000     0.160000           0.933333
+            svm_rbf             step2_subtype/combined          3       0.920000     0.160000           0.933333
+  gradient_boosting             step2_subtype/combined          3       0.912893     0.143863           0.916667
+logistic_regression             step2_subtype/combined          3       0.805813     0.134023           0.834259
+linear_discriminant             step2_subtype/combined          3       0.751051     0.125795           0.800926
+  gradient_boosting      step2_subtype/perceptual_only          3       0.925926     0.148148           0.933333
+      random_forest      step2_subtype/perceptual_only          3       0.920000     0.160000           0.933333
+            svm_rbf      step2_subtype/perceptual_only          3       0.882305     0.175409           0.891667
+logistic_regression      step2_subtype/perceptual_only          3       0.781555     0.095945           0.842593
+linear_discriminant      step2_subtype/perceptual_only          3       0.747196     0.091906           0.792593
+
+-> saved ml_reports/summary.csv
