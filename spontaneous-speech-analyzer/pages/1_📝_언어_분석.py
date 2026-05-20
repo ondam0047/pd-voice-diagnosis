@@ -1,6 +1,7 @@
-"""📝 언어 분석 — MLU/TTR/NDW (M1: 텍스트 입력 모드).
+"""📝 언어 분석 — MLU/TTR/NDW.
 
-낱말 = 체언+용언+수식언+독립언. 의미 영역(명사/대명사·동사/형용사·부사/관형사·독립언) 세분화.
+M1: 텍스트 입력. M2: 음성 업로드 + Whisper 표준어 전사 → 임상가 검수 → 분석.
+낱말 = 체언+용언+수식언+독립언. 의미/문법 영역 분석.
 """
 
 import os
@@ -19,6 +20,11 @@ from modules.morpheme import (  # noqa: E402
     SENTENCE_TYPES,
     MorphemeAnalyzer,
 )
+from modules.transcription import (  # noqa: E402
+    TranscriptionError,
+    format_ts,
+    transcribe_target,
+)
 
 st.set_page_config(page_title="언어 분석", page_icon="📝", layout="wide")
 
@@ -35,44 +41,8 @@ def get_analyzer() -> MorphemeAnalyzer:
     return MorphemeAnalyzer()
 
 
-st.title("📝 언어 분석")
-st.caption("MLU-w · MLU-m · TTR · NDW · TNW  ·  낱말 = 체언 + 용언 + 수식언 + 독립언")
-
-# --- 입력 방식 선택 ---
-input_mode = st.radio(
-    "입력 방식",
-    ["텍스트 직접 입력", "음성 업로드 (M2 예정)"],
-    horizontal=True,
-)
-
-if input_mode == "음성 업로드 (M2 예정)":
-    st.info("음성 업로드 → Whisper 자동 전사 기능은 M2에서 제공됩니다. 지금은 텍스트 입력을 사용하세요.")
-    st.file_uploader("음성 파일 (.mp3, .wav, .m4a)", type=["mp3", "wav", "m4a"], disabled=True)
-    st.stop()
-
-st.markdown("**발화를 한 줄에 하나씩 입력하세요.** (한 줄 = 한 발화)")
-st.caption("정확한 지표를 위해 표준어로 정규화하고 반복·수정·간투사(마디)는 제외한 전사를 권장합니다.")
-
-if st.button("예시 발화 불러오기"):
-    st.session_state["lang_text"] = SAMPLE_UTTERANCES
-
-text = st.text_area(
-    "발화 입력",
-    key="lang_text",
-    height=220,
-    placeholder="예)\n엄마랑 아빠랑 같이 큰집에 갔어요\n그러면 우리 같이 영화 보러 가요",
-)
-
-run = st.button("분석 실행", type="primary")
-
-if run:
-    utterances = [line for line in text.splitlines() if line.strip()]
-    if not utterances:
-        st.warning("발화를 한 줄 이상 입력하세요.")
-        st.stop()
-
-    analyzer = get_analyzer()
-    result = analyzer.analyze(utterances)
+def show_results(result: dict) -> None:
+    """분석 결과 렌더링."""
     stats = result["stats"]
 
     # --- 핵심 지표 ---
@@ -122,7 +92,7 @@ if run:
 
     st.divider()
 
-    # --- 문법 영역: 문법형태소 세분류 ---
+    # --- 문법형태소 세분류 ---
     st.subheader("문법형태소 (세분류)")
     gcat = stats["gram_categories"]
     gcat_df = pd.DataFrame(
@@ -149,7 +119,7 @@ if run:
 
     st.divider()
 
-    # --- 문법 영역: 문장유형 (자동 추정) ---
+    # --- 문장유형 (자동 추정) ---
     st.subheader("문장유형 (자동 추정)")
     sent = stats["sentence_types"]
     sc1, sc2, sc3 = st.columns(3)
@@ -204,3 +174,64 @@ if run:
                  for w in stats["word_freq"]]
             )
             st.dataframe(wf_df, use_container_width=True, hide_index=True)
+
+
+# ===================== 페이지 본문 =====================
+st.title("📝 언어 분석")
+st.caption("MLU-w · MLU-m · TTR · NDW · TNW  ·  낱말 = 체언 + 용언 + 수식언 + 독립언")
+
+input_mode = st.radio("입력 방식", ["텍스트 직접 입력", "음성 업로드"], horizontal=True)
+
+utterances: list[str] | None = None
+
+if input_mode == "텍스트 직접 입력":
+    st.markdown("**발화를 한 줄에 하나씩 입력하세요.** (한 줄 = 한 발화)")
+    st.caption("정확한 지표를 위해 표준어로 정규화하고 반복·수정·간투사(마디)는 제외한 전사를 권장합니다.")
+    if st.button("예시 발화 불러오기"):
+        st.session_state["lang_text"] = SAMPLE_UTTERANCES
+    text = st.text_area(
+        "발화 입력", key="lang_text", height=220,
+        placeholder="예)\n엄마랑 아빠랑 같이 큰집에 갔어요\n그러면 우리 같이 영화 보러 가요",
+    )
+    if st.button("분석 실행", type="primary"):
+        utterances = [line for line in text.splitlines() if line.strip()]
+        if not utterances:
+            st.warning("발화를 한 줄 이상 입력하세요.")
+            utterances = None
+
+else:  # 음성 업로드
+    st.markdown("**음성 파일을 업로드하면 Whisper로 표준어 초안을 전사합니다.**")
+    st.caption("전사 후 발화별로 검수(수정)한 뒤 분석하세요. (OpenAI API 키 필요 · Whisper 25MB 제한)")
+    uploaded = st.file_uploader("음성 파일 (.mp3, .wav, .m4a)", type=["mp3", "wav", "m4a"])
+
+    if uploaded is not None:
+        st.audio(uploaded)
+        if st.button("🎙️ 자동 전사 시작", type="primary"):
+            try:
+                with st.spinner("Whisper 전사 중…"):
+                    segs = transcribe_target(uploaded.name, uploaded.getvalue())
+                st.session_state["voice_segments"] = segs
+                st.session_state["voice_edit"] = "\n".join(s["text"] for s in segs)
+                st.success(f"{len(segs)}개 발화 전사 완료. 아래에서 검수하세요.")
+            except TranscriptionError as e:
+                st.error(str(e))
+
+    if st.session_state.get("voice_segments"):
+        with st.expander("전사 원본 (타임스탬프)", expanded=False):
+            ref = pd.DataFrame([
+                {"#": s["index"], "시간": f"{format_ts(s['start'])}–{format_ts(s['end'])}",
+                 "전사": s["text"]}
+                for s in st.session_state["voice_segments"]
+            ])
+            st.dataframe(ref, use_container_width=True, hide_index=True)
+
+        st.markdown("**발화별 검수** — 한 줄 = 한 발화 (표준어로 수정)")
+        edited = st.text_area("검수 (수정 가능)", key="voice_edit", height=260)
+        if st.button("분석 실행", type="primary"):
+            utterances = [line for line in edited.splitlines() if line.strip()]
+            if not utterances:
+                st.warning("검수된 발화가 없습니다.")
+                utterances = None
+
+if utterances:
+    show_results(get_analyzer().analyze(utterances))
