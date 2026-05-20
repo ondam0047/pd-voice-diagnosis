@@ -1,0 +1,22 @@
+{
+  "phonetic_transcription_examples": [
+    {"standard": "만들기 힘들어서", "produced": "만들기 심들어서"},
+    {"standard": "동글동글 돌면 돼요", "produced": "동글동글 돌면 되요"},
+    {"standard": "우리 집이 시골이라서", "produced": "우리 십이 시골이라서"},
+    {"standard": "눈사람", "produced": "눈샤람"},
+    {"standard": "만들어봤는데", "produced": "만들어팠는데"},
+    {"standard": "갑자기 막 녹고", "produced": "갑자기 만녹고"},
+    {"standard": "넘어지고", "produced": "넘어시고"},
+    {"standard": "부서져요", "produced": "부셔져요"},
+    {"standard": "우리 가족", "produced": "우리 가속"},
+    {"standard": "같이 갔고", "produced": "다치 가소고"},
+    {"standard": "큰삼촌네", "produced": "킁삼손네"},
+    {"standard": "초등학교", "produced": "토등학교"},
+    {"standard": "충치", "produced": "춘치"},
+    {"standard": "여행", "produced": "여앵"},
+    {"standard": "사주셨고", "produced": "사쉈고"},
+    {"standard": "내어서", "produced": "내어서"},
+    {"standard": "용기를", "produced": "용기를"}
+  ],
+  "instruction": "표준어로 자동 보정하지 말고, 위 예시처럼 실제 발음대로 한글 전사할 것"
+}

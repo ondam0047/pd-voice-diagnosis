@@ -6,7 +6,10 @@ M2: transcribe_target — Whisper로 표준어 초안 전사, Whisper 세그먼�
 
 from __future__ import annotations
 
+import base64
+import io
 import os
+import wave
 
 from dotenv import load_dotenv
 
@@ -89,3 +92,92 @@ def format_ts(seconds: float) -> str:
     """초 → mm:ss."""
     m, s = divmod(int(round(seconds)), 60)
     return f"{m:02d}:{s:02d}"
+
+
+# ===================== 산출형 전사 (GPT-4o audio) =====================
+
+def _slice_wav(audio_bytes: bytes, start: float, end: float) -> bytes:
+    """wav 바이트에서 [start, end] 구간을 잘라 wav 바이트로 반환 (ffmpeg 불필요)."""
+    with wave.open(io.BytesIO(audio_bytes), "rb") as w:
+        fr, nch, sw = w.getframerate(), w.getnchannels(), w.getsampwidth()
+        w.setpos(min(int(start * fr), w.getnframes()))
+        frames = w.readframes(max(0, int((end - start) * fr)))
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as o:
+        o.setnchannels(nch)
+        o.setsampwidth(sw)
+        o.setframerate(fr)
+        o.writeframes(frames)
+    return buf.getvalue()
+
+
+def slice_audio(audio_bytes: bytes, file_name: str, start: float, end: float):
+    """오디오 구간 분할 → (wav_bytes, 'wav'). wav는 ffmpeg 불필요, 그 외는 pydub(ffmpeg) 필요."""
+    ext = file_name.rsplit(".", 1)[-1].lower()
+    if ext == "wav":
+        return _slice_wav(audio_bytes, start, end), "wav"
+    try:
+        from pydub import AudioSegment
+    except Exception as e:  # pragma: no cover
+        raise TranscriptionError(f"{ext} 분할에는 pydub/ffmpeg가 필요합니다.") from e
+    try:
+        seg = AudioSegment.from_file(io.BytesIO(audio_bytes), format=ext)
+        clip = seg[int(start * 1000):int(end * 1000)]
+        out = io.BytesIO()
+        clip.export(out, format="wav")
+        return out.getvalue(), "wav"
+    except Exception as e:
+        raise TranscriptionError(
+            f"{ext} 분할 실패(ffmpeg 미설치 가능): {e}. wav 파일을 사용하세요."
+        ) from e
+
+
+def _build_produced_prompt(few_shot: dict) -> tuple[str, str]:
+    examples = few_shot.get("phonetic_transcription_examples", [])
+    instruction = few_shot.get("instruction", "")
+    ex_text = "\n".join(
+        f'- "{e["standard"]}" → "{e["produced"]}"' for e in examples
+    )
+    system = (
+        "당신은 아동 말소리를 들리는 실제 발음 그대로 한글로 전사하는 전문가입니다. "
+        + instruction
+    )
+    user = (
+        "다음 예시처럼 표준어로 보정하지 말고, 오디오에서 들리는 실제 발음대로 "
+        "한글로만 한 줄 전사하세요. 설명 없이 전사 결과만 출력합니다.\n\n"
+        f"[예시]\n{ex_text}\n\n[전사할 발화 → 산출형]:"
+    )
+    return system, user
+
+
+def transcribe_produced(
+    file_name: str, audio_bytes: bytes, few_shot: dict, language: str = "ko"
+) -> str:
+    """음성 구간 → 산출형(실제 발음) 한글 전사. GPT-4o audio + few-shot."""
+    if not audio_bytes:
+        raise TranscriptionError("빈 오디오입니다.")
+    audio_format = file_name.rsplit(".", 1)[-1].lower()
+    if audio_format not in ("wav", "mp3"):
+        raise TranscriptionError(
+            f"GPT-4o audio는 wav/mp3만 지원합니다 (현재: {audio_format})."
+        )
+    client = _get_client()
+    model = os.getenv("GPT_AUDIO_MODEL", "gpt-4o-audio-preview")
+    system, user = _build_produced_prompt(few_shot)
+    audio_b64 = base64.b64encode(audio_bytes).decode()
+    try:
+        resp = client.chat.completions.create(
+            model=model,
+            modalities=["text"],
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": [
+                    {"type": "text", "text": user},
+                    {"type": "input_audio",
+                     "input_audio": {"data": audio_b64, "format": audio_format}},
+                ]},
+            ],
+        )
+    except Exception as e:
+        raise TranscriptionError(f"산출형 전사 실패: {e}") from e
+    return (resp.choices[0].message.content or "").strip()
