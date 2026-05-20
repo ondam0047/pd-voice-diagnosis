@@ -1,4 +1,7 @@
-"""📝 언어 분석 — MLU/TTR/NDW (M1: 텍스트 입력 모드)."""
+"""📝 언어 분석 — MLU/TTR/NDW (M1: 텍스트 입력 모드).
+
+낱말 단위는 품사 기준(체언 + 용언).
+"""
 
 import os
 import sys
@@ -13,15 +16,13 @@ from modules.morpheme import MorphemeAnalyzer  # noqa: E402
 
 st.set_page_config(page_title="언어 분석", page_icon="📝", layout="wide")
 
-# 엑셀 Sheet1 아동 연결발화에서 추출한 표준어 형태 (테스트/예시용)
-SAMPLE_UTTERANCES = """우리 집이 시골이라서 눈사람 만들기 힘들어서
-동글동글 돌면 돼요
-만들어봤는데 갑자기 막 녹고 부서져요
-넘어지고 다쳤어요
-우리 가족 같이 갔고 큰삼촌네 초등학교에 갔어요
-충치 때문에 치과에 갔어요
-여행 가서 용기를 내어서 놀이기구 탔어요
-삼촌이 장난감 사주셨고 너무 좋았어요"""
+# 엑셀 Sheet1 아동 연결발화 (산출형 그대로) — 테스트/예시용
+SAMPLE_UTTERANCES = """동글동글 돌면 되요. 우리십이 시골이라서 눈샤람 만들어팠는데 갑자기 만녹고 막 넘어시고
+네, 그냥 부셔져요
+모르겠어요. 많이 가봐서.
+우리 가속, 우리 가속이랑 다치 가소고, 그다음에는 킁삼손네 가속, 작은 삼손네 가속
+춘치 마이 생겼고 어린 이가 빠져나오라고 하니까 뽑았고
+용기를 내어서 울지 않았으니까 우리 엄마는 잘했다 그래서 맛있는 것도 많이 사쉈고"""
 
 
 @st.cache_resource(show_spinner="형태소 분석기 로딩 중…")
@@ -30,7 +31,7 @@ def get_analyzer() -> MorphemeAnalyzer:
 
 
 st.title("📝 언어 분석")
-st.caption("MLU-w · MLU-m · TTR · NDW · TNW · 문법형태소 분포")
+st.caption("MLU-w · MLU-m · TTR · NDW · TNW · 문법형태소 분포  ·  낱말 단위 = 체언 + 용언")
 
 # --- 입력 방식 선택 ---
 input_mode = st.radio(
@@ -53,7 +54,7 @@ text = st.text_area(
     "발화 입력",
     key="lang_text",
     height=220,
-    placeholder="예)\n우리 집이 시골이라서 눈사람 만들기 힘들어서\n동글동글 돌면 돼요",
+    placeholder="예)\n동글동글 돌면 되요\n우리 가속이랑 다치 가소고",
 )
 
 run = st.button("분석 실행", type="primary")
@@ -72,19 +73,42 @@ if run:
     st.subheader("핵심 지표")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("발화 수", stats["utterance_count"])
-    c2.metric("MLU-w (평균 어절)", stats["mlu_w"])
+    c2.metric("MLU-w (평균 낱말)", stats["mlu_w"])
     c3.metric("MLU-m (평균 형태소)", stats["mlu_m"])
     c4.metric("TTR (어휘 다양도)", stats["ttr"])
 
     c5, c6, c7 = st.columns(3)
-    c5.metric("TNW (총 어절 수)", stats["tnw"])
-    c6.metric("NDW (서로 다른 어절)", stats["ndw"])
+    c5.metric("TNW (총 낱말 수)", stats["tnw"])
+    c6.metric("NDW (서로 다른 낱말)", stats["ndw"])
     c7.metric("총 형태소 수", stats["total_morphemes"])
 
     st.caption(
-        "MLU-w = 총 어절 수 / 발화 수 · MLU-m = 총 형태소 수 / 발화 수 · "
-        "TTR = NDW / TNW (어절 기준). 낱말 단위는 공백 기준 어절을 사용합니다."
+        "낱말 = 체언 + 용언 (품사 기준, 세종 태그셋). "
+        "MLU-w = 총 낱말 / 발화 수 · MLU-m = 총 형태소 / 발화 수 · TTR = NDW / TNW."
     )
+
+    st.divider()
+
+    # --- 낱말: 체언 / 용언 분포 ---
+    st.subheader("낱말 분포 (체언 / 용언)")
+    cc1, cc2, cc3, cc4 = st.columns(4)
+    cc1.metric("체언 (낱말)", stats["cheeon_count"])
+    cc2.metric("용언 (낱말)", stats["yongeon_count"])
+    cc3.metric("체언 (서로 다름)", stats["cheeon_ndw"])
+    cc4.metric("용언 (서로 다름)", stats["yongeon_ndw"])
+
+    wc_df = pd.DataFrame({
+        "품사": ["체언", "용언"],
+        "총 낱말 수": [stats["cheeon_count"], stats["yongeon_count"]],
+        "서로 다른 낱말": [stats["cheeon_ndw"], stats["yongeon_ndw"]],
+    })
+    fig_wc = px.bar(
+        wc_df.melt(id_vars="품사", var_name="구분", value_name="빈도"),
+        x="품사", y="빈도", color="구분", barmode="group", text="빈도",
+        color_discrete_map={"총 낱말 수": "#4C78A8", "서로 다른 낱말": "#9ECAE1"},
+    )
+    fig_wc.update_layout(xaxis_title="", height=360, legend_title="")
+    st.plotly_chart(fig_wc, use_container_width=True)
 
     st.divider()
 
@@ -124,22 +148,27 @@ if run:
     st.subheader("발화별 상세")
     detail_df = pd.DataFrame(
         [
-            {"#": i + 1, "발화": u["text"], "어절": u["words"], "형태소": u["morphemes"]}
+            {"#": i + 1, "발화": u["text"], "낱말": u["words"],
+             "체언": u["cheeon"], "용언": u["yongeon"], "형태소": u["morphemes"]}
             for i, u in enumerate(result["utterances"])
         ]
     )
     st.dataframe(detail_df, use_container_width=True, hide_index=True)
 
-    with st.expander("형태소 분해 보기"):
+    with st.expander("형태소 분해 보기 (체언/용언 표시)"):
         for i, u in enumerate(result["utterances"]):
             st.markdown(f"**{i + 1}. {u['text']}**")
-            morph_str = "  ".join(
-                f"`{t['form']}`/{t['tag']}" for t in u["tokens"]
-            )
-            st.markdown(morph_str)
+            parts = []
+            for t in u["tokens"]:
+                mark = f" ⟨{t['word_class']}⟩" if t["word_class"] else ""
+                parts.append(f"`{t['form']}`/{t['tag']}{mark}")
+            st.markdown("  ".join(parts))
 
-    # --- 어절 빈도 ---
+    # --- 낱말 빈도 ---
     if stats["word_freq"]:
-        with st.expander("어절 빈도 (상위 20)"):
-            wf_df = pd.DataFrame(stats["word_freq"], columns=["어절", "빈도"])
+        with st.expander("낱말 빈도 (체언+용언, 상위 20)"):
+            wf_df = pd.DataFrame(
+                [{"낱말": w["word"], "품사": w["word_class"], "빈도": w["count"]}
+                 for w in stats["word_freq"]]
+            )
             st.dataframe(wf_df, use_container_width=True, hide_index=True)
