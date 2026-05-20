@@ -11,7 +11,11 @@ import pandas as pd
 import streamlit as st
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from modules.shared_ui import get_analyzer, render_language_results  # noqa: E402
+from modules.shared_ui import (  # noqa: E402
+    api_key_input,
+    get_analyzer,
+    render_language_results,
+)
 from modules.transcription import (  # noqa: E402
     TranscriptionError,
     format_ts,
@@ -19,6 +23,7 @@ from modules.transcription import (  # noqa: E402
 )
 
 st.set_page_config(page_title="언어 분석", page_icon="📝", layout="wide")
+api_key = api_key_input()
 
 SAMPLE_UTTERANCES = """엄마랑 아빠랑 같이 큰집에 갔어요
 토끼가 추운데 죽어서 너무 슬펐어요
@@ -56,7 +61,8 @@ else:  # 음성 업로드 (언어 분석은 목표어만 필요)
         if st.button("🎙️ 자동 전사 시작", type="primary"):
             try:
                 with st.spinner("Whisper 전사 중…"):
-                    segs = transcribe_target(uploaded.name, uploaded.getvalue())
+                    segs = transcribe_target(
+                        uploaded.name, uploaded.getvalue(), api_key=api_key)
                 st.session_state["lang_voice_segments"] = segs
                 st.success(f"{len(segs)}개 발화 전사 완료. 화자를 지정하고 검수하세요.")
             except TranscriptionError as e:

@@ -1,12 +1,19 @@
 """자발화 분석 도구 — 메인 (홈 + 모드 선택)."""
 
+import os
+import sys
+
 import streamlit as st
+
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from modules.shared_ui import api_key_input  # noqa: E402
 
 st.set_page_config(
     page_title="자발화 분석 도구",
     page_icon="🎙️",
     layout="wide",
 )
+api_key_input()
 
 st.title("🎙️ 자발화 분석 도구")
 st.caption("언어치료 자발화 분석 — 음성/텍스트 → 형태소·조음 분석 → 보고서 (로컬 도구)")

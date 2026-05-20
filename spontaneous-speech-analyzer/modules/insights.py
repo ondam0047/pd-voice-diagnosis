@@ -75,11 +75,12 @@ def generate_insight(
     articulation: dict | None = None,
     language: dict | None = None,
     model: str | None = None,
+    api_key: str | None = None,
 ) -> str:
     """LLM 임상 코멘트 생성. API 키 미설정 시 TranscriptionError."""
     if articulation is None and language is None:
         raise TranscriptionError("분석 결과가 없습니다.")
-    client = _get_client()
+    client = _get_client(api_key)
     model = model or os.getenv("INSIGHT_MODEL", "gpt-4o-mini")
     system, user = _build_prompt(articulation, language)
     try:

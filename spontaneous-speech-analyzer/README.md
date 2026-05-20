@@ -35,7 +35,27 @@ streamlit run app.py
 
 브라우저에서 메인 페이지 → 모드 카드 선택.
 
-> M1(언어 분석 텍스트 모드)은 OpenAI API 키 없이도 동작합니다.
+> 텍스트 언어 분석·산출형 직접 입력은 OpenAI API 키 없이도 동작합니다.
+
+## API 키 (각 사용자가 직접 입력)
+
+음성 전사·AI 코멘트는 OpenAI API를 사용합니다. **앱 사이드바에 각자 본인 키를 입력**합니다.
+- 키는 서버에 저장되지 않고 **해당 브라우저 세션에만** 유지됩니다(여러 사용자가 동시에 써도 서로 섞이지 않음).
+- 운영자가 공용 키를 쓰고 싶으면 배포 환경의 `OPENAI_API_KEY` 환경변수로 설정할 수 있습니다(비용은 운영자 부담).
+- `ffmpeg`는 `imageio-ffmpeg`로 자동 포함되어 **별도 설치가 필요 없습니다**(mp3·m4a·wav 모두 동작).
+
+## 웹앱 배포 (다른 사람도 브라우저로 사용)
+
+이미 Streamlit 앱이라 바로 웹 배포가 가능합니다.
+
+**Streamlit Community Cloud (가장 쉬움, 무료)**
+1. 이 폴더(`spontaneous-speech-analyzer/`) 내용을 **전용 GitHub 저장소의 루트**로 올립니다.
+   (Streamlit Cloud는 저장소 루트의 `requirements.txt`를 사용하므로, 하위 폴더보다 전용 repo가 깔끔합니다.)
+2. share.streamlit.io → New app → 저장소 선택 → Main file: `app.py` → Deploy
+3. 배포된 `...streamlit.app` 링크를 공유. 사용자는 사이드바에 본인 API 키만 입력하면 됩니다.
+
+> ⚠️ 환자 음성은 업로드 시 서버와 OpenAI로 전송됩니다. 공개 링크 사용 시 보호자 동의·기관 정책을
+> 확인하세요. 비공개가 필요하면 앱 비밀번호(`st.secrets`) 또는 사설 서버(Render 등)를 사용하세요.
 
 ## 디렉토리 구조
 

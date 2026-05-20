@@ -9,6 +9,9 @@ from __future__ import annotations
 import base64
 import io
 import os
+import shutil
+import subprocess
+import tempfile
 import wave
 
 from dotenv import load_dotenv
@@ -22,17 +25,17 @@ class TranscriptionError(Exception):
     """전사 과정에서 발생하는 사용자 대응 가능한 오류."""
 
 
-def _get_client():
+def _get_client(api_key: str | None = None):
     try:
         from openai import OpenAI
     except ImportError as e:  # pragma: no cover
         raise TranscriptionError(
             "openai 패키지가 설치되어 있지 않습니다. `pip install openai`"
         ) from e
-    key = (os.getenv("OPENAI_API_KEY") or "").strip()
+    key = (api_key or os.getenv("OPENAI_API_KEY") or "").strip()
     if not key or key.startswith("sk-...") or key.lower() == "your_key_here":
         raise TranscriptionError(
-            "OPENAI_API_KEY가 설정되지 않았습니다. .env 파일에 키를 입력하세요."
+            "OpenAI API 키가 없습니다. 사이드바에 키를 입력하거나 .env에 설정하세요."
         )
     return OpenAI(api_key=key)
 
@@ -65,7 +68,7 @@ def _parse_segments(resp) -> list[dict]:
 
 
 def transcribe_target(
-    file_name: str, audio_bytes: bytes, language: str = "ko"
+    file_name: str, audio_bytes: bytes, language: str = "ko", api_key: str | None = None
 ) -> list[dict]:
     """음성 → 표준어 전사(발화 리스트). 각 항목: index, start, end, text."""
     if not audio_bytes:
@@ -74,7 +77,7 @@ def transcribe_target(
         raise TranscriptionError(
             "파일이 25MB를 초과합니다 (Whisper API 제한). 파일을 분할해 주세요."
         )
-    client = _get_client()
+    client = _get_client(api_key)
     model = os.getenv("WHISPER_MODEL", "whisper-1")
     try:
         resp = client.audio.transcriptions.create(
@@ -111,25 +114,52 @@ def _slice_wav(audio_bytes: bytes, start: float, end: float) -> bytes:
     return buf.getvalue()
 
 
+def _ffmpeg_exe() -> str:
+    """시스템 ffmpeg 우선, 없으면 pip 설치 정적 ffmpeg(imageio-ffmpeg)."""
+    sys_ff = shutil.which("ffmpeg")
+    if sys_ff:
+        return sys_ff
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception as e:  # pragma: no cover
+        raise TranscriptionError(
+            "ffmpeg를 찾을 수 없습니다. `pip install imageio-ffmpeg` 또는 ffmpeg 설치."
+        ) from e
+
+
 def slice_audio(audio_bytes: bytes, file_name: str, start: float, end: float):
-    """오디오 구간 분할 → (wav_bytes, 'wav'). wav는 ffmpeg 불필요, 그 외는 pydub(ffmpeg) 필요."""
+    """오디오 구간 분할 → (wav_bytes, 'wav').
+
+    wav는 표준 라이브러리로 무손실 분할(ffmpeg 불필요). mp3/m4a는 ffmpeg 바이너리를
+    직접 호출(ffprobe 불필요). imageio-ffmpeg가 설치돼 있으면 별도 설치 없이 동작.
+    """
     ext = file_name.rsplit(".", 1)[-1].lower()
     if ext == "wav":
         return _slice_wav(audio_bytes, start, end), "wav"
+    ff = _ffmpeg_exe()
+    in_path = out_path = None
     try:
-        from pydub import AudioSegment
-    except Exception as e:  # pragma: no cover
-        raise TranscriptionError(f"{ext} 분할에는 pydub/ffmpeg가 필요합니다.") from e
-    try:
-        seg = AudioSegment.from_file(io.BytesIO(audio_bytes), format=ext)
-        clip = seg[int(start * 1000):int(end * 1000)]
-        out = io.BytesIO()
-        clip.export(out, format="wav")
-        return out.getvalue(), "wav"
-    except Exception as e:
-        raise TranscriptionError(
-            f"{ext} 분할 실패(ffmpeg 미설치 가능): {e}. wav 파일을 사용하세요."
-        ) from e
+        with tempfile.NamedTemporaryFile(suffix=f".{ext}", delete=False) as tf:
+            tf.write(audio_bytes)
+            in_path = tf.name
+        out_path = in_path + ".out.wav"
+        # WAV는 시킹이 필요해 pipe 대신 파일로 출력(헤더 크기 정상 기록)
+        cmd = [
+            ff, "-y", "-hide_banner", "-loglevel", "error",
+            "-i", in_path, "-ss", str(start), "-t", str(max(0.0, end - start)),
+            "-ac", "1", "-ar", "16000", out_path,
+        ]
+        proc = subprocess.run(cmd, capture_output=True)
+        if proc.returncode != 0 or not os.path.exists(out_path):
+            raise TranscriptionError(
+                f"{ext} 분할 실패: {proc.stderr.decode(errors='ignore')[:200]}")
+        with open(out_path, "rb") as f:
+            return f.read(), "wav"
+    finally:
+        for p in (in_path, out_path):
+            if p and os.path.exists(p):
+                os.remove(p)
 
 
 def _build_produced_prompt(few_shot: dict) -> tuple[str, str]:
@@ -151,7 +181,8 @@ def _build_produced_prompt(few_shot: dict) -> tuple[str, str]:
 
 
 def transcribe_produced(
-    file_name: str, audio_bytes: bytes, few_shot: dict, language: str = "ko"
+    file_name: str, audio_bytes: bytes, few_shot: dict,
+    language: str = "ko", api_key: str | None = None,
 ) -> str:
     """음성 구간 → 산출형(실제 발음) 한글 전사. GPT-4o audio + few-shot."""
     if not audio_bytes:
@@ -161,7 +192,7 @@ def transcribe_produced(
         raise TranscriptionError(
             f"GPT-4o audio는 wav/mp3만 지원합니다 (현재: {audio_format})."
         )
-    client = _get_client()
+    client = _get_client(api_key)
     model = os.getenv("GPT_AUDIO_MODEL", "gpt-4o-audio-preview")
     system, user = _build_produced_prompt(few_shot)
     audio_b64 = base64.b64encode(audio_bytes).decode()

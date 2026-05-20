@@ -39,6 +39,23 @@ def load_few_shot() -> dict:
         return json.load(f)
 
 
+def api_key_input() -> str:
+    """사이드바 OpenAI API 키 입력. 키는 이 세션(브라우저)에만 보관된다."""
+    with st.sidebar:
+        st.markdown("### 🔑 OpenAI API 키")
+        key = st.text_input(
+            "sk-...", type="password", key="api_key_field",
+            help="음성 전사·AI 코멘트에만 사용됩니다. 서버에 저장되지 않고 이 세션에만 유지됩니다.")
+        env_key = (os.getenv("OPENAI_API_KEY") or "").strip()
+        effective = key.strip() or (env_key if not env_key.startswith("sk-...") else "")
+        if effective:
+            st.caption("✅ 키 입력됨")
+        else:
+            st.caption("키가 없어도 텍스트 언어 분석·산출형 직접 입력은 동작합니다.")
+        st.caption("키 발급: platform.openai.com")
+    return effective
+
+
 # ---------- 음성 듀얼 검수 (목표어/산출형) : 조음·통합 공용 ----------
 
 def child_pairs(edited: pd.DataFrame) -> list[tuple[str, str]]:
@@ -57,7 +74,7 @@ def child_targets(edited: pd.DataFrame) -> list[str]:
     return [str(t).strip() for t in rows["목표어"] if str(t).strip()]
 
 
-def voice_dual_review(prefix: str) -> pd.DataFrame | None:
+def voice_dual_review(prefix: str, api_key: str = "") -> pd.DataFrame | None:
     """음성 업로드 → Whisper 목표어 + 화자 지정 + 산출형 듀얼 검수 표.
 
     반환: 편집된 DataFrame(화자/목표어/산출형) 또는 None(아직 전사 전).
@@ -72,7 +89,8 @@ def voice_dual_review(prefix: str) -> pd.DataFrame | None:
         if st.button("🎙️ 목표어 전사 시작 (Whisper)", type="primary", key=f"{prefix}_tr"):
             try:
                 with st.spinner("Whisper 전사 중…"):
-                    segs = transcribe_target(uploaded.name, uploaded.getvalue())
+                    segs = transcribe_target(
+                        uploaded.name, uploaded.getvalue(), api_key=api_key)
                 st.session_state[seg_key] = segs
                 st.session_state[audio_key] = (uploaded.name, uploaded.getvalue())
                 st.session_state[pmap_key] = {}
@@ -118,7 +136,7 @@ def voice_dual_review(prefix: str) -> pd.DataFrame | None:
                 s = seg_by_idx[idx]
                 try:
                     clip, _ = slice_audio(abytes, fname, s["start"], s["end"])
-                    new_map[idx] = transcribe_produced("seg.wav", clip, few)
+                    new_map[idx] = transcribe_produced("seg.wav", clip, few, api_key=api_key)
                     done += 1
                 except TranscriptionError:
                     failed += 1

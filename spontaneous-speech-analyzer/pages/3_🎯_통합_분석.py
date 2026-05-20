@@ -13,6 +13,7 @@ from modules.insights import (  # noqa: E402
     summarize_language,
 )
 from modules.shared_ui import (  # noqa: E402
+    api_key_input,
     child_pairs,
     child_targets,
     get_analyzer,
@@ -23,11 +24,12 @@ from modules.shared_ui import (  # noqa: E402
 from modules.transcription import TranscriptionError  # noqa: E402
 
 st.set_page_config(page_title="통합 분석", page_icon="🎯", layout="wide")
+api_key = api_key_input()
 
 st.title("🎯 통합 분석")
 st.caption("음성 → 듀얼 전사·검수 → 언어 + 조음 분석 모두 실행 → 종합 보고서")
 
-edited = voice_dual_review("integ")
+edited = voice_dual_review("integ", api_key)
 
 if edited is not None and st.button("📊 통합 분석 실행", type="primary"):
     targets = child_targets(edited)
@@ -69,7 +71,7 @@ if lang is not None or artic is not None:
             try:
                 with st.spinner("코멘트 생성 중…"):
                     st.session_state["integ_insight"] = generate_insight(
-                        articulation=artic, language=lang)
+                        articulation=artic, language=lang, api_key=api_key)
             except TranscriptionError as e:
                 st.error(str(e))
         if st.session_state.get("integ_insight"):
