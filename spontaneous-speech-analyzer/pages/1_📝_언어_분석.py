@@ -200,8 +200,11 @@ if input_mode == "텍스트 직접 입력":
             utterances = None
 
 else:  # 음성 업로드
-    st.markdown("**음성 파일을 업로드하면 Whisper로 표준어 초안을 전사합니다.**")
-    st.caption("전사 후 발화별로 검수(수정)한 뒤 분석하세요. (OpenAI API 키 필요 · Whisper 25MB 제한)")
+    st.markdown(
+        "**음성을 업로드하면 Whisper로 전사합니다.** 표에서 발화별 화자(아동/치료사/제외)를 "
+        "지정하면 **아동 발화만** 분석합니다."
+    )
+    st.caption("OpenAI API 키 필요 · Whisper 25MB 제한. 전사 후 화자 지정·표준어 수정 검수하세요.")
     uploaded = st.file_uploader("음성 파일 (.mp3, .wav, .m4a)", type=["mp3", "wav", "m4a"])
 
     if uploaded is not None:
@@ -211,26 +214,36 @@ else:  # 음성 업로드
                 with st.spinner("Whisper 전사 중…"):
                     segs = transcribe_target(uploaded.name, uploaded.getvalue())
                 st.session_state["voice_segments"] = segs
-                st.session_state["voice_edit"] = "\n".join(s["text"] for s in segs)
-                st.success(f"{len(segs)}개 발화 전사 완료. 아래에서 검수하세요.")
+                st.success(f"{len(segs)}개 발화 전사 완료. 화자를 지정하고 검수하세요.")
             except TranscriptionError as e:
                 st.error(str(e))
 
-    if st.session_state.get("voice_segments"):
-        with st.expander("전사 원본 (타임스탬프)", expanded=False):
-            ref = pd.DataFrame([
-                {"#": s["index"], "시간": f"{format_ts(s['start'])}–{format_ts(s['end'])}",
-                 "전사": s["text"]}
-                for s in st.session_state["voice_segments"]
-            ])
-            st.dataframe(ref, use_container_width=True, hide_index=True)
-
-        st.markdown("**발화별 검수** — 한 줄 = 한 발화 (표준어로 수정)")
-        edited = st.text_area("검수 (수정 가능)", key="voice_edit", height=260)
+    segs = st.session_state.get("voice_segments")
+    if segs:
+        st.markdown("**발화별 검수** — 화자 지정(아동/치료사/제외) + 표준어 수정")
+        base_df = pd.DataFrame([
+            {"#": s["index"],
+             "시간": f"{format_ts(s['start'])}–{format_ts(s['end'])}",
+             "화자": "아동",
+             "전사": s["text"]}
+            for s in segs
+        ])
+        edited_df = st.data_editor(
+            base_df, key="voice_table", use_container_width=True, hide_index=True,
+            disabled=["#", "시간"],
+            column_config={
+                "화자": st.column_config.SelectboxColumn(
+                    "화자", options=["아동", "치료사", "제외"], required=True, width="small"),
+                "전사": st.column_config.TextColumn("전사 (수정 가능)", width="large"),
+            },
+        )
+        n_child = int((edited_df["화자"] == "아동").sum())
+        st.caption(f"아동 발화로 지정된 항목: {n_child}개 (이 항목만 분석)")
         if st.button("분석 실행", type="primary"):
-            utterances = [line for line in edited.splitlines() if line.strip()]
+            child_rows = edited_df[edited_df["화자"] == "아동"]
+            utterances = [t for t in child_rows["전사"].tolist() if str(t).strip()]
             if not utterances:
-                st.warning("검수된 발화가 없습니다.")
+                st.warning("아동 발화로 지정된 항목이 없습니다. 화자를 지정하세요.")
                 utterances = None
 
 if utterances:
