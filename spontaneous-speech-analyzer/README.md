@@ -18,8 +18,8 @@
 - [x] **M1** — 메인 페이지 + 언어 분석(텍스트 입력)
 - [x] **M2** — 음성 업로드 + Whisper 전사 → 발화별 화자 지정(아동/치료사/제외) → 아동만 분석
 - [x] **M3** — GPT-4o audio 산출형 전사 + 듀얼 검수 + 조음 분석(PCC·컨퓨전 매트릭스·위치별 오류)
-- [ ] M4 — 통합 분석 페이지
-- [ ] M5 — 인사이트 레이어 (LLM 임상 코멘트)
+- [x] **M4** — 통합 분석 페이지 (언어+조음 탭 + 종합 보고서)
+- [x] **M5** — 인사이트 레이어 (APAC 분류 기반 LLM 임상 코멘트)
 - [ ] M6 — Tauri 패키징 (.exe)
 
 ## 설치 & 실행 (Windows, Python 3.11 권장)
@@ -48,8 +48,15 @@ spontaneous-speech-analyzer/
 │   └── 3_🎯_통합_분석.py        # 통합 분석 (M4 예정)
 ├── modules/
 │   ├── __init__.py
-│   └── morpheme.py              # kiwipiepy → MLU/TTR
-├── data/                        # few-shot 예시 등 (M3~)
+│   ├── morpheme.py              # kiwipiepy → MLU/TTR/품사/문장유형
+│   ├── transcription.py         # Whisper 목표어 + GPT-4o audio 산출형 전사
+│   ├── g2p.py                   # g2pkk 래퍼 (목표어 → 발음형)
+│   ├── jamo_split.py            # 초성/중성/종성 분리
+│   ├── articulation.py          # 컨퓨전 매트릭스 + PCC + 위치별 오류
+│   ├── insights.py              # APAC 기반 LLM 임상 코멘트
+│   └── shared_ui.py             # 모드 간 공유 UI 컴포넌트
+├── data/
+│   └── few_shot_examples.json   # 산출형 전사 few-shot
 ├── .env.example
 ├── requirements.txt
 └── README.md
