@@ -12,7 +12,13 @@ import streamlit as st
 
 # 프로젝트 루트를 import 경로에 추가 (페이지 직접 실행 대비)
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from modules.morpheme import BROAD_OF, SEMANTIC_ORDER, MorphemeAnalyzer  # noqa: E402
+from modules.morpheme import (  # noqa: E402
+    BROAD_OF,
+    GRAM_ORDER,
+    SEMANTIC_ORDER,
+    SENTENCE_TYPES,
+    MorphemeAnalyzer,
+)
 
 st.set_page_config(page_title="언어 분석", page_icon="📝", layout="wide")
 
@@ -116,21 +122,55 @@ if run:
 
     st.divider()
 
-    # --- 문법형태소 분포 ---
-    st.subheader("문법형태소 분포")
-    gram = stats["grammatical_morphemes"]
-    if gram:
-        gram_df = pd.DataFrame(
-            {"문법형태소": list(gram.keys()), "빈도": list(gram.values())}
-        )
-        gfig = px.bar(
-            gram_df, x="문법형태소", y="빈도", text="빈도",
-            color="빈도", color_continuous_scale="Blues",
-        )
-        gfig.update_layout(xaxis_title="", coloraxis_showscale=False, height=360)
-        st.plotly_chart(gfig, use_container_width=True)
-    else:
-        st.info("문법형태소(조사·어미·접사)가 검출되지 않았습니다.")
+    # --- 문법 영역: 문법형태소 세분류 ---
+    st.subheader("문법형태소 (세분류)")
+    gcat = stats["gram_categories"]
+    gcat_df = pd.DataFrame(
+        {"문법형태소": GRAM_ORDER, "빈도": [gcat[c] for c in GRAM_ORDER]}
+    )
+    gfig = px.bar(
+        gcat_df, x="문법형태소", y="빈도", text="빈도",
+        category_orders={"문법형태소": GRAM_ORDER},
+        color="빈도", color_continuous_scale="Blues",
+    )
+    gfig.update_layout(xaxis_title="", coloraxis_showscale=False, height=340)
+    st.plotly_chart(gfig, use_container_width=True)
+    st.caption("피동·사동 접사는 형태소 분석기가 어간에 병합하여 자동 분리되지 않습니다 (임상가 검수 항목).")
+
+    with st.expander("문법형태소 상세 (조사·어미 종류별)"):
+        gram = stats["grammatical_morphemes"]
+        if gram:
+            st.dataframe(
+                pd.DataFrame({"종류": list(gram.keys()), "빈도": list(gram.values())}),
+                use_container_width=True, hide_index=True,
+            )
+        else:
+            st.info("검출된 문법형태소가 없습니다.")
+
+    st.divider()
+
+    # --- 문법 영역: 문장유형 (자동 추정) ---
+    st.subheader("문장유형 (자동 추정)")
+    sent = stats["sentence_types"]
+    sc1, sc2, sc3 = st.columns(3)
+    sc1.metric("단문", sent["단문"])
+    sc2.metric("이어진문장", sent["이어진문장"])
+    sc3.metric("안긴문장", sent["안긴문장"])
+    sent_df = pd.DataFrame(
+        {"문장유형": SENTENCE_TYPES, "발화 수": [sent[s] for s in SENTENCE_TYPES]}
+    )
+    sfig = px.bar(
+        sent_df, x="문장유형", y="발화 수", text="발화 수",
+        category_orders={"문장유형": SENTENCE_TYPES},
+        color="문장유형",
+        color_discrete_map={"단문": "#4C78A8", "이어진문장": "#F58518", "안긴문장": "#54A24B"},
+    )
+    sfig.update_layout(xaxis_title="", showlegend=False, height=320)
+    st.plotly_chart(sfig, use_container_width=True)
+    st.caption(
+        "연결어미(이어진문장)·전성어미/관형절(안긴문장) 기반 자동 추정입니다. "
+        "관형 수식·인용절 등은 정확도가 낮아 임상가 검수가 필요합니다."
+    )
 
     st.divider()
 
@@ -138,7 +178,8 @@ if run:
     st.subheader("발화별 상세")
     detail_df = pd.DataFrame(
         [
-            {"#": i + 1, "발화": u["text"], "낱말": u["words"], "형태소": u["morphemes"],
+            {"#": i + 1, "발화": u["text"], "문장유형": u["sentence_type"],
+             "낱말": u["words"], "형태소": u["morphemes"],
              **{c: u["semantic"][c] for c in SEMANTIC_ORDER}}
             for i, u in enumerate(result["utterances"])
         ]

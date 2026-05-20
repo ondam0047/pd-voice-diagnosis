@@ -60,6 +60,38 @@ TAG_LABELS = {
     "XSV": "동사파생접미사", "XSA": "형용사파생접미사", "XR": "어근",
 }
 
+# 문법형태소 정답지 범주 (조사는 모두 '조사'로 묶음)
+GRAM_CATEGORY = {
+    **{t: "조사" for t in JOSA_TAGS},
+    "EC": "연결어미", "EF": "어말어미", "EP": "선어말어미",
+    "ETN": "전성어미", "ETM": "전성어미",
+}
+GRAM_ORDER = ["조사", "연결어미", "어말어미", "선어말어미", "전성어미"]
+# 피동/사동 접사는 kiwi가 어간에 병합하여 자동 분리 불가 → 임상가 검수 항목
+
+SENTENCE_TYPES = ["단문", "이어진문장", "안긴문장"]
+
+
+def _sentence_type(base_seq: list[str]) -> str:
+    """문장유형 자동 추정 (단문/이어진문장/안긴문장). 임상가 검수 필요.
+
+    - 이어진문장: 연결어미(EC) 존재 (절 접속)
+    - 안긴문장: 명사형 전성어미(ETN) 또는 동사+관형형 전성어미(ETM, 관형절)
+    - 그 외: 단문
+    (형용사 수식 '큰 집' 등 단순 관형 수식은 단문으로 둠)
+    """
+    has_conn = "EC" in base_seq
+    has_nom = "ETN" in base_seq
+    has_rel = any(
+        b == "ETM" and i > 0 and base_seq[i - 1] in {"VV", "EP"}
+        for i, b in enumerate(base_seq)
+    )
+    if has_conn:
+        return "이어진문장"
+    if has_nom or has_rel:
+        return "안긴문장"
+    return "단문"
+
 
 def _headword(form: str, cat: str | None) -> str:
     """낱말 표제어. 용언(동사/형용사)은 기본형(어간+다)으로."""
@@ -83,6 +115,8 @@ class MorphemeAnalyzer:
         word_counter: Counter[tuple[str, str]] = Counter()
         sem_counter: Counter[str] = Counter()
         gram_counter: Counter[str] = Counter()
+        gram_cat_counter: Counter[str] = Counter()
+        sent_counter: Counter[str] = Counter()
         total_morphemes = 0
         total_words = 0
 
@@ -94,11 +128,15 @@ class MorphemeAnalyzer:
 
             u_sem: Counter[str] = Counter()
             u_tokens = []
+            base_seq = []
             for t in morphs:
                 base = t.tag.split("-", 1)[0]
+                base_seq.append(base)
                 cat = SEMANTIC_MAP.get(base)
                 if base in GRAMMATICAL_TAGS:
                     gram_counter[TAG_LABELS.get(base, base)] += 1
+                if base in GRAM_CATEGORY:
+                    gram_cat_counter[GRAM_CATEGORY[base]] += 1
                 if cat:  # 낱말(내용어)
                     head = _headword(t.form, cat)
                     u_sem[cat] += 1
@@ -114,10 +152,13 @@ class MorphemeAnalyzer:
 
             u_words = sum(u_sem.values())
             total_words += u_words
+            sent_type = _sentence_type(base_seq)
+            sent_counter[sent_type] += 1
             per_utterance.append({
                 "text": utt,
                 "words": u_words,
                 "morphemes": len(morphs),
+                "sentence_type": sent_type,
                 "semantic": {c: u_sem.get(c, 0) for c in SEMANTIC_ORDER},
                 "tokens": u_tokens,
             })
@@ -142,6 +183,8 @@ class MorphemeAnalyzer:
             "semantic_counts": {c: sem_counter.get(c, 0) for c in SEMANTIC_ORDER},
             "semantic_ndw": {c: len(type_by_cat[c]) for c in SEMANTIC_ORDER},
             "broad_counts": dict(broad_counts),
+            "gram_categories": {c: gram_cat_counter.get(c, 0) for c in GRAM_ORDER},
+            "sentence_types": {s: sent_counter.get(s, 0) for s in SENTENCE_TYPES},
             "grammatical_morphemes": dict(gram_counter.most_common()),
             "word_freq": [
                 {"word": head, "category": cat, "count": cnt}
