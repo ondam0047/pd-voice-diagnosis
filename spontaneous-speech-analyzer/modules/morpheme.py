@@ -188,7 +188,7 @@ class MorphemeAnalyzer:
             "grammatical_morphemes": dict(gram_counter.most_common()),
             "word_freq": [
                 {"word": head, "category": cat, "count": cnt}
-                for (head, cat), cnt in word_counter.most_common(20)
+                for (head, cat), cnt in word_counter.most_common()
             ],
         }
 

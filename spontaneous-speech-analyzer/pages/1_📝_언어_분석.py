@@ -72,7 +72,7 @@ else:  # 음성 업로드 (언어 분석은 목표어만 필요)
 
     segs = st.session_state.get("lang_voice_segments")
     if segs:
-        st.markdown("**발화별 검수** — 화자 지정(아동/치료사/제외) + 표준어 수정")
+        st.markdown("**발화별 검수** — 화자 지정 + 표준어 수정 · 행 추가/삭제로 발화 분리·병합")
         base_df = pd.DataFrame([
             {"#": s["index"], "시간": f"{format_ts(s['start'])}–{format_ts(s['end'])}",
              "화자": "아동", "전사": s["text"]}
@@ -80,7 +80,7 @@ else:  # 음성 업로드 (언어 분석은 목표어만 필요)
         ])
         edited_df = st.data_editor(
             base_df, key="lang_voice_table", use_container_width=True, hide_index=True,
-            disabled=["#", "시간"],
+            num_rows="dynamic", disabled=["#", "시간"],
             column_config={
                 "화자": st.column_config.SelectboxColumn(
                     "화자", options=["아동", "치료사", "제외"], required=True, width="small"),

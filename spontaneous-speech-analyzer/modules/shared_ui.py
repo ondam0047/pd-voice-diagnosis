@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hmac
+import io
 import json
 import os
 
@@ -158,7 +159,7 @@ def voice_dual_review(prefix: str, api_key: str = "") -> pd.DataFrame | None:
         return None
 
     pmap = st.session_state.get(pmap_key, {})
-    st.markdown("**듀얼 검수** — 화자(아동/치료사/제외) 지정 · 목표어/산출형 수정")
+    st.markdown("**듀얼 검수** — 화자(아동/치료사/제외) 지정 · 목표어/산출형 수정 · 행 추가/삭제로 분리·병합")
     base_df = pd.DataFrame([
         {"#": s["index"],
          "시간": f"{format_ts(s['start'])}–{format_ts(s['end'])}",
@@ -169,7 +170,7 @@ def voice_dual_review(prefix: str, api_key: str = "") -> pd.DataFrame | None:
     ])
     edited = st.data_editor(
         base_df, key=table_key, use_container_width=True, hide_index=True,
-        disabled=["#", "시간"],
+        num_rows="dynamic", disabled=["#", "시간"],
         column_config={
             "화자": st.column_config.SelectboxColumn(
                 "화자", options=["아동", "치료사", "제외"], required=True, width="small"),
@@ -204,10 +205,97 @@ def voice_dual_review(prefix: str, api_key: str = "") -> pd.DataFrame | None:
     return edited
 
 
+# ---------- 엑셀 내보내기 ----------
+
+XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def _language_detail_df(result: dict) -> pd.DataFrame:
+    return pd.DataFrame([
+        {"#": i + 1, "발화": u["text"], "문장유형": u["sentence_type"],
+         "낱말": u["words"], "형태소": u["morphemes"],
+         **{c: u["semantic"][c] for c in SEMANTIC_ORDER}}
+        for i, u in enumerate(result["utterances"])
+    ])
+
+
+def _word_freq_df(result: dict) -> pd.DataFrame:
+    return pd.DataFrame(
+        [{"낱말": w["word"], "품사": w["category"], "빈도": w["count"]}
+         for w in result["stats"]["word_freq"]])
+
+
+def language_to_excel(result: dict) -> bytes:
+    stats = result["stats"]
+    summary = pd.DataFrame({
+        "지표": ["발화 수", "MLU-w(평균 낱말)", "MLU-m(평균 형태소)", "TTR",
+               "TNW(총 낱말)", "NDW(서로 다른 낱말)", "총 형태소",
+               "체언", "용언", "수식언", "독립언"],
+        "값": [stats["utterance_count"], stats["mlu_w"], stats["mlu_m"], stats["ttr"],
+              stats["tnw"], stats["ndw"], stats["total_morphemes"],
+              stats["broad_counts"].get("체언", 0), stats["broad_counts"].get("용언", 0),
+              stats["broad_counts"].get("수식언", 0), stats["broad_counts"].get("독립언", 0)],
+    })
+    sem = pd.DataFrame({
+        "품사": SEMANTIC_ORDER,
+        "대분류": [BROAD_OF[c] for c in SEMANTIC_ORDER],
+        "총 낱말": [stats["semantic_counts"][c] for c in SEMANTIC_ORDER],
+        "서로 다른 낱말": [stats["semantic_ndw"][c] for c in SEMANTIC_ORDER],
+    })
+    gram = pd.DataFrame({"문법형태소": GRAM_ORDER,
+                         "빈도": [stats["gram_categories"][c] for c in GRAM_ORDER]})
+    sent = pd.DataFrame({"문장유형": SENTENCE_TYPES,
+                         "발화 수": [stats["sentence_types"][s] for s in SENTENCE_TYPES]})
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+        summary.to_excel(xw, sheet_name="요약", index=False)
+        sem.to_excel(xw, sheet_name="의미영역", index=False)
+        gram.to_excel(xw, sheet_name="문법형태소", index=False)
+        sent.to_excel(xw, sheet_name="문장유형", index=False)
+        _language_detail_df(result).to_excel(xw, sheet_name="발화별", index=False)
+        _word_freq_df(result).to_excel(xw, sheet_name="낱말빈도", index=False)
+    return buf.getvalue()
+
+
+def articulation_to_excel(result: dict) -> bytes:
+    s = result["summary"]
+    summary = pd.DataFrame({
+        "지표": ["PCC(%)", "목표 자음 수", "정확 자음 수", "오류 수", "첨가"],
+        "값": [result["pcc"], s["total_consonants"], s["correct_consonants"],
+              s["error_count"], s["additions"]],
+    })
+    pe, pt = result["position_errors"], result["position_total"]
+    pos = pd.DataFrame({
+        "위치": POSITION_ORDER,
+        "오류": [pe[p] for p in POSITION_ORDER],
+        "전체": [pt[p] for p in POSITION_ORDER],
+        "오류율(%)": [round(pe[p] / pt[p] * 100, 1) if pt[p] else 0.0 for p in POSITION_ORDER],
+    })
+    pa = pd.DataFrame({"음소": list(result["phoneme_accuracy"].keys()),
+                       "정확도(%)": list(result["phoneme_accuracy"].values())})
+    conf_rows = [{"목표": t, "산출": p, "빈도": c}
+                 for t, row in result["confusion_matrix"].items() for p, c in row.items()]
+    conf = pd.DataFrame(conf_rows) if conf_rows else pd.DataFrame(columns=["목표", "산출", "빈도"])
+    errs = pd.DataFrame(result["errors"]).rename(columns={
+        "target": "목표", "produced": "산출", "position": "위치", "word": "어절"}) \
+        if result["errors"] else pd.DataFrame(columns=["목표", "산출", "위치", "어절"])
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+        summary.to_excel(xw, sheet_name="요약", index=False)
+        pos.to_excel(xw, sheet_name="위치별오류", index=False)
+        pa.to_excel(xw, sheet_name="음소정확도", index=False)
+        conf.to_excel(xw, sheet_name="컨퓨전매트릭스", index=False)
+        errs.to_excel(xw, sheet_name="오류상세", index=False)
+    return buf.getvalue()
+
+
 # ---------- 언어 분석 결과 렌더링 ----------
 
 def render_language_results(result: dict) -> None:
     stats = result["stats"]
+    st.download_button(
+        "⬇️ 엑셀로 전체 결과 다운로드", data=language_to_excel(result),
+        file_name="언어분석.xlsx", mime=XLSX_MIME, key="dl_lang")
 
     st.subheader("핵심 지표")
     c1, c2, c3, c4 = st.columns(4)
@@ -297,18 +385,22 @@ def render_language_results(result: dict) -> None:
                 for t in u["tokens"]
             ]
             st.markdown("  ".join(parts))
+    st.divider()
+    st.subheader("낱말 빈도표")
+    st.caption(f"총 낱말(TNW): {stats['tnw']} · 서로 다른 낱말(NDW): {stats['ndw']} · 표의 빈도 합 = TNW")
     if stats["word_freq"]:
-        with st.expander("낱말 빈도 (기본형, 상위 20)"):
-            st.dataframe(
-                pd.DataFrame([{"낱말": w["word"], "품사": w["category"], "빈도": w["count"]}
-                             for w in stats["word_freq"]]),
-                use_container_width=True, hide_index=True)
+        st.dataframe(_word_freq_df(result), use_container_width=True, hide_index=True)
+    else:
+        st.info("낱말이 없습니다.")
 
 
 # ---------- 조음 분석 결과 렌더링 ----------
 
 def render_articulation_results(result: dict) -> None:
     s = result["summary"]
+    st.download_button(
+        "⬇️ 엑셀로 전체 결과 다운로드", data=articulation_to_excel(result),
+        file_name="조음분석.xlsx", mime=XLSX_MIME, key="dl_artic")
     st.subheader("결과")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("PCC (자음정확도)", f"{result['pcc']}%")

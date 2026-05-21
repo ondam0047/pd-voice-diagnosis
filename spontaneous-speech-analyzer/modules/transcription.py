@@ -9,6 +9,7 @@ from __future__ import annotations
 import base64
 import io
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -44,6 +45,35 @@ def _seg_attr(seg, name):
     if isinstance(seg, dict):
         return seg.get(name)
     return getattr(seg, name, None)
+
+
+_SENT_SPLIT = re.compile(r"(?<=[.!?。])\s+")
+
+
+def _split_by_sentence(segments: list[dict]) -> list[dict]:
+    """한 세그먼트에 여러 문장이 묶인 경우 종결부호(. ! ?) 기준으로 발화 분리.
+
+    문장별 정확한 타임스탬프가 없으므로 글자 수 비례로 시간을 분배한다.
+    """
+    out: list[dict] = []
+    for s in segments:
+        text = (s.get("text") or "").strip()
+        parts = [p.strip() for p in _SENT_SPLIT.split(text) if p.strip()]
+        if len(parts) <= 1:
+            out.append({"start": float(s.get("start", 0.0)),
+                        "end": float(s.get("end", 0.0)), "text": text})
+            continue
+        total = sum(len(p) for p in parts) or 1
+        start = float(s.get("start", 0.0))
+        dur = max(0.0, float(s.get("end", start)) - start)
+        acc = start
+        for p in parts:
+            seg_end = acc + dur * (len(p) / total)
+            out.append({"start": acc, "end": seg_end, "text": p})
+            acc = seg_end
+    for i, s in enumerate(out, 1):
+        s["index"] = i
+    return out
 
 
 def _parse_segments(resp) -> list[dict]:
@@ -88,7 +118,7 @@ def transcribe_target(
         )
     except Exception as e:  # API/네트워크 오류
         raise TranscriptionError(f"전사 실패: {e}") from e
-    return _parse_segments(resp)
+    return _split_by_sentence(_parse_segments(resp))
 
 
 def format_ts(seconds: float) -> str:
