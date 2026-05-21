@@ -12,11 +12,13 @@ from modules.shared_ui import (  # noqa: E402
     api_key_input,
     child_pairs,
     render_articulation_results,
+    require_password,
     voice_dual_review,
 )
 from modules.transcription import TranscriptionError  # noqa: E402
 
 st.set_page_config(page_title="조음 분석", page_icon="🔊", layout="wide")
+require_password()
 api_key = api_key_input()
 
 st.title("🔊 조음 분석")

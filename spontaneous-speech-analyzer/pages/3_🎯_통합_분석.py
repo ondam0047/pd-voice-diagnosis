@@ -19,11 +19,13 @@ from modules.shared_ui import (  # noqa: E402
     get_analyzer,
     render_articulation_results,
     render_language_results,
+    require_password,
     voice_dual_review,
 )
 from modules.transcription import TranscriptionError  # noqa: E402
 
 st.set_page_config(page_title="통합 분석", page_icon="🎯", layout="wide")
+require_password()
 api_key = api_key_input()
 
 st.title("🎯 통합 분석")

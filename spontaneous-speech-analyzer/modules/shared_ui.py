@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 
@@ -39,21 +40,74 @@ def load_few_shot() -> dict:
         return json.load(f)
 
 
-def api_key_input() -> str:
-    """사이드바 OpenAI API 키 입력. 키는 이 세션(브라우저)에만 보관된다."""
-    with st.sidebar:
-        st.markdown("### 🔑 OpenAI API 키")
-        key = st.text_input(
-            "sk-...", type="password", key="api_key_field",
-            help="음성 전사·AI 코멘트에만 사용됩니다. 서버에 저장되지 않고 이 세션에만 유지됩니다.")
-        env_key = (os.getenv("OPENAI_API_KEY") or "").strip()
-        effective = key.strip() or (env_key if not env_key.startswith("sk-...") else "")
-        if effective:
-            st.caption("✅ 키 입력됨")
+def get_openai_key() -> str:
+    """공용 키(운영자) 우선: st.secrets → 환경변수 → 세션 입력."""
+    try:
+        k = st.secrets.get("OPENAI_API_KEY", "")
+        if k:
+            return str(k).strip()
+    except Exception:
+        pass
+    env = (os.getenv("OPENAI_API_KEY") or "").strip()
+    if env and not env.startswith("sk-..."):
+        return env
+    return (st.session_state.get("user_api_key") or "").strip()
+
+
+def _configured_password() -> str:
+    try:
+        p = st.secrets.get("APP_PASSWORD", "")
+        if p:
+            return str(p)
+    except Exception:
+        pass
+    return os.getenv("APP_PASSWORD", "")
+
+
+def require_password() -> None:
+    """비밀번호 게이트. APP_PASSWORD 미설정이면 통과(로컬 개발)."""
+    pw = _configured_password()
+    if not pw or st.session_state.get("authenticated"):
+        return
+    st.markdown("## 🔒 접근 비밀번호")
+    st.caption("승인된 사용자만 이용할 수 있습니다.")
+    entered = st.text_input("비밀번호", type="password", key="pw_input")
+    if entered:
+        if hmac.compare_digest(entered, pw):
+            st.session_state["authenticated"] = True
+            st.rerun()
         else:
-            st.caption("키가 없어도 텍스트 언어 분석·산출형 직접 입력은 동작합니다.")
-        st.caption("키 발급: platform.openai.com")
-    return effective
+            st.error("비밀번호가 올바르지 않습니다.")
+    st.stop()
+
+
+def _server_key() -> str:
+    try:
+        k = str(st.secrets.get("OPENAI_API_KEY", "") or "")
+        if k:
+            return k.strip()
+    except Exception:
+        pass
+    env = (os.getenv("OPENAI_API_KEY") or "").strip()
+    return env if env and not env.startswith("sk-...") else ""
+
+
+def api_key_input() -> str:
+    """공용 키가 설정돼 있으면 상태만 표시, 없으면 입력란 제공(로컬/개인)."""
+    with st.sidebar:
+        if _server_key():
+            st.caption("🔑 OpenAI 키: 운영자 설정됨")
+        else:
+            st.markdown("### 🔑 OpenAI API 키")
+            entered = st.text_input(
+                "sk-...", type="password", key="api_key_field",
+                help="음성 전사·AI 코멘트에 필요. 이 세션에만 보관됩니다.")
+            if entered.strip():
+                st.session_state["user_api_key"] = entered.strip()
+            if not get_openai_key():
+                st.caption("키가 없어도 텍스트 언어 분석은 동작합니다.")
+            st.caption("키 발급: platform.openai.com")
+    return get_openai_key()
 
 
 # ---------- 음성 듀얼 검수 (목표어/산출형) : 조음·통합 공용 ----------

@@ -6,13 +6,14 @@ import sys
 import streamlit as st
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from modules.shared_ui import api_key_input  # noqa: E402
+from modules.shared_ui import api_key_input, require_password  # noqa: E402
 
 st.set_page_config(
     page_title="자발화 분석 도구",
     page_icon="🎙️",
     layout="wide",
 )
+require_password()
 api_key_input()
 
 st.title("🎙️ 자발화 분석 도구")

@@ -15,6 +15,7 @@ from modules.shared_ui import (  # noqa: E402
     api_key_input,
     get_analyzer,
     render_language_results,
+    require_password,
 )
 from modules.transcription import (  # noqa: E402
     TranscriptionError,
@@ -23,6 +24,7 @@ from modules.transcription import (  # noqa: E402
 )
 
 st.set_page_config(page_title="언어 분석", page_icon="📝", layout="wide")
+require_password()
 api_key = api_key_input()
 
 SAMPLE_UTTERANCES = """엄마랑 아빠랑 같이 큰집에 갔어요
